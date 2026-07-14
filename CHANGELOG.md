@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-14
+
 ### Added
 
 - `sureva login` is the primary authentication path, using Cognito Managed

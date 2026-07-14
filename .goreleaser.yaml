@@ -53,26 +53,8 @@ changelog:
       - "Merge pull request"
       - "Merge branch"
 
-homebrew_casks:
-  - name: sureva
-    ids:
-      - sureva
-    binaries:
-      - sureva
-    repository:
-      owner: sureva-ch
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Casks
-    homepage: https://github.com/sureva-ch/sureva-cli
-    description: CLI for the Sureva cloud platform
-    license: MIT
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sureva"]
-          end
-
-# Scoop bucket distribution is still pending. It requires a public bucket repo
-# (sureva-ch/scoop-bucket) and a SCOOP_BUCKET_GITHUB_TOKEN secret.
+# Homebrew cask and Scoop bucket distribution are deferred. The initial releases
+# ship the multi-platform binaries and checksums on the GitHub Release, which is
+# also the source used by `sureva upgrade`. Adding a cask requires a public
+# sureva-ch/homebrew-tap repo + HOMEBREW_TAP_GITHUB_TOKEN; Scoop requires a public
+# sureva-ch/scoop-bucket repo + SCOOP_BUCKET_GITHUB_TOKEN.
