@@ -1,0 +1,19 @@
+# Build output (root binary)
+/sureva
+dist/
+
+# Go toolchain
+*.test
+*.out
+coverage.txt
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# goreleaser
+dist/
+.cache/
+.atl

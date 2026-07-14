@@ -1,0 +1,78 @@
+version: 2
+
+project_name: sureva
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sureva
+    main: ./cmd/sureva
+    binary: sureva
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/sureva-ch/sureva-cli/internal/version.Version={{.Version}}
+      - -X github.com/sureva-ch/sureva-cli/internal/version.Commit={{.Commit}}
+      - -X github.com/sureva-ch/sureva-cli/internal/version.BuiltAt={{.Date}}
+      - -X github.com/sureva-ch/sureva-cli/internal/credentials.DefaultCognitoClientID={{.Env.SUREVA_COGNITO_CLIENT_ID}}
+
+archives:
+  - id: sureva
+    ids:
+      - sureva
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "sureva_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+homebrew_casks:
+  - name: sureva
+    ids:
+      - sureva
+    binaries:
+      - sureva
+    repository:
+      owner: sureva-ch
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/sureva-ch/sureva-cli
+    description: CLI for the Sureva cloud platform
+    license: MIT
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sureva"]
+          end
+
+# Scoop bucket distribution is still pending. It requires a public bucket repo
+# (sureva-ch/scoop-bucket) and a SCOOP_BUCKET_GITHUB_TOKEN secret.
