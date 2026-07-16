@@ -230,11 +230,11 @@ sureva apps list --org <slug>          # list apps in a specific org
 sureva apps get <app-id> --org <slug>  # get app details (includes composed url field)
 
 # Create an app (team auto-selected when org has exactly one team)
-sureva apps create --name my-app --type web --region us-east-1 --org <slug>
-sureva apps create --name my-api --type api --runtime nodejs24 --region us-east-1 --team <slug> --org <slug>
+sureva apps create --name my-app --type web --region eu-central-1 --org <slug>
+sureva apps create --name my-api --type api --runtime nodejs24 --region eu-central-1 --team <slug> --org <slug>
 
 # Create and wait for domain to become active
-sureva apps create --name my-app --type web --region us-east-1 --org <slug> --wait
+sureva apps create --name my-app --type web --region eu-central-1 --org <slug> --wait
 
 # Delete an app (async teardown — --yes required)
 sureva apps delete <app-id> --org <slug> --yes
@@ -242,7 +242,7 @@ sureva apps delete <app-id> --org <slug> --yes
 
 **App types**: `web` | `web-ssr` | `api` | `sse`
 **Runtimes** (required for non-web types): `nodejs24` | `python314` | `go126`
-**Regions**: `us-east-1` | `us-east-2` | `sa-east-1`
+**Regions**: `eu-central-1` | `eu-central-2`
 
 The CLI only composes an app `url` when a verified deployment suffix is supplied
 with `SUREVA_DOMAIN_SUFFIX` or the `domain_suffix` config key. Without one, the

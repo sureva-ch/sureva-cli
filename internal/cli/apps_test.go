@@ -34,7 +34,7 @@ func orgsAndAppsHandler(orgSlug, orgID string, appsJSON, appJSON string) http.Ha
 // ---- spec B-01a: apps list default JSON output ----
 
 func TestAppsList_JSONOutput(t *testing.T) {
-	const appsJSON = `[{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"api","aws_region":"us-east-1","github_repo_full":"acme/repo","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
+	const appsJSON = `[{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"api","aws_region":"eu-central-1","github_repo_full":"acme/repo","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
 	handler := orgsAndAppsHandler("acme", "org-1", appsJSON, "")
 	srv := newTestServer(t, handler)
 	outBuf, _, exec := newTestRoot(t, srv)
@@ -56,7 +56,7 @@ func TestAppsList_JSONOutput(t *testing.T) {
 // ---- spec B-01a: apps list without --org uses flat endpoint ----
 
 func TestAppsList_NoOrg_UsesFlatEndpoint(t *testing.T) {
-	const appsJSON = `[{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"api","aws_region":"us-east-1","github_repo_full":"acme/repo","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
+	const appsJSON = `[{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"api","aws_region":"eu-central-1","github_repo_full":"acme/repo","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/apps", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -127,7 +127,7 @@ func TestAppsGet_MissingOrg_ExitValidation(t *testing.T) {
 // ---- apps get: success ----
 
 func TestAppsGet_Success(t *testing.T) {
-	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"api","aws_region":"us-east-1","github_repo_full":"acme/repo","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
+	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"api","aws_region":"eu-central-1","github_repo_full":"acme/repo","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
 	handler := orgsAndAppsHandler("acme", "org-1", "", appJSON)
 	srv := newTestServer(t, handler)
 	outBuf, _, exec := newTestRoot(t, srv)
@@ -149,7 +149,7 @@ func TestAppsGet_Success(t *testing.T) {
 // ---- T16: appView url composition RED tests ----
 
 func TestAppsGet_URL_OmittedWithoutConfiguredSuffix(t *testing.T) {
-	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"us-east-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
+	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"eu-central-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
 	handler := orgsAndAppsHandler("acme", "org-1", "", appJSON)
 	srv := newTestServer(t, handler)
 	outBuf, _, exec := newTestRoot(t, srv)
@@ -170,7 +170,7 @@ func TestAppsGet_URL_OmittedWithoutConfiguredSuffix(t *testing.T) {
 }
 
 func TestAppsGet_URL_EnvOverride(t *testing.T) {
-	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"us-east-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
+	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"eu-central-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
 	handler := orgsAndAppsHandler("acme", "org-1", "", appJSON)
 	srv := newTestServer(t, handler)
 	outBuf, _, exec := newTestRoot(t, srv)
@@ -193,7 +193,7 @@ func TestAppsGet_URL_EnvOverride(t *testing.T) {
 
 func TestAppsGet_URL_EmptySubdomain_Omitted(t *testing.T) {
 	// App with empty subdomain → url field must be absent from output.
-	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"us-east-1","github_repo_full":"","github_branch":"main","subdomain":"","domain_status":"pending","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
+	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"eu-central-1","github_repo_full":"","github_branch":"main","subdomain":"","domain_status":"pending","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
 	handler := orgsAndAppsHandler("acme", "org-1", "", appJSON)
 	srv := newTestServer(t, handler)
 	outBuf, _, exec := newTestRoot(t, srv)
@@ -299,6 +299,51 @@ func appsCreateMux(orgSlug, orgID, teamsJSON string) *http.ServeMux {
 	return mux
 }
 
+func TestAppsCreate_InvalidRegion_ExitValidation(t *testing.T) {
+	mux := appsCreateMux("acme", "org-1", "[]")
+	mux.HandleFunc("/v1/orgs/org-1/apps", func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("CreateApp must not be called when region validation fails")
+	})
+	srv := newTestServer(t, mux)
+	_, errBuf, exec := newTestRoot(t, srv)
+
+	// us-east-1 is a legacy region no longer supported; must be rejected client-side.
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--org", "acme")
+
+	if got := exitCode(err); got != output.ExitValidation {
+		t.Errorf("invalid region: want exit %d (validation), got %d; stderr: %s", output.ExitValidation, got, errBuf)
+	}
+	var env map[string]any
+	if jsonErr := json.NewDecoder(errBuf).Decode(&env); jsonErr != nil {
+		t.Fatalf("invalid region: stderr not JSON: %v\nstderr: %s", jsonErr, errBuf)
+	}
+	if code, _ := env["code"].(string); code != "validation_error" {
+		t.Errorf("invalid region: want code validation_error, got %q", code)
+	}
+}
+
+func TestAppsCreate_MissingRegion_ExitValidation(t *testing.T) {
+	mux := appsCreateMux("acme", "org-1", "[]")
+	mux.HandleFunc("/v1/orgs/org-1/apps", func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("CreateApp must not be called when region is missing")
+	})
+	srv := newTestServer(t, mux)
+	_, errBuf, exec := newTestRoot(t, srv)
+
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--org", "acme")
+
+	if got := exitCode(err); got != output.ExitValidation {
+		t.Errorf("missing region: want exit %d (validation), got %d; stderr: %s", output.ExitValidation, got, errBuf)
+	}
+	var env map[string]any
+	if jsonErr := json.NewDecoder(errBuf).Decode(&env); jsonErr != nil {
+		t.Fatalf("missing region: stderr not JSON: %v\nstderr: %s", jsonErr, errBuf)
+	}
+	if code, _ := env["code"].(string); code != "validation_error" {
+		t.Errorf("missing region: want code validation_error, got %q", code)
+	}
+}
+
 func TestAppsCreate_ZeroTeams_ExitValidation(t *testing.T) {
 	mux := appsCreateMux("acme", "org-1", "[]")
 	mux.HandleFunc("/v1/orgs/org-1/apps", func(w http.ResponseWriter, _ *http.Request) {
@@ -307,7 +352,7 @@ func TestAppsCreate_ZeroTeams_ExitValidation(t *testing.T) {
 	srv := newTestServer(t, mux)
 	_, errBuf, exec := newTestRoot(t, srv)
 
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--org", "acme")
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme")
 
 	if got := exitCode(err); got != output.ExitValidation {
 		t.Errorf("zero teams: want exit %d, got %d; stderr: %s", output.ExitValidation, got, errBuf)
@@ -323,7 +368,7 @@ func TestAppsCreate_ZeroTeams_ExitValidation(t *testing.T) {
 
 func TestAppsCreate_SingleTeam_AutoSelect_Success(t *testing.T) {
 	const oneTeam = `[{"id":"team-1","org_id":"org-1","slug":"engineers","name":"Engineers","is_system":false,"is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
-	const createdApp = `{"id":"app-new","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"us-east-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"pending","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
+	const createdApp = `{"id":"app-new","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"eu-central-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"pending","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`
 	mux := appsCreateMux("acme", "org-1", oneTeam)
 	mux.HandleFunc("/v1/orgs/org-1/apps", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -337,7 +382,7 @@ func TestAppsCreate_SingleTeam_AutoSelect_Success(t *testing.T) {
 	srv := newTestServer(t, mux)
 	outBuf, _, exec := newTestRoot(t, srv)
 
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--org", "acme")
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme")
 
 	if got := exitCode(err); got != output.ExitOK {
 		t.Errorf("single team auto-select: want exit 0, got %d", got)
@@ -357,7 +402,7 @@ func TestAppsCreate_MultipleTeams_ExitValidation(t *testing.T) {
 	srv := newTestServer(t, mux)
 	_, errBuf, exec := newTestRoot(t, srv)
 
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--org", "acme")
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme")
 
 	if got := exitCode(err); got != output.ExitValidation {
 		t.Errorf("multiple teams: want exit %d, got %d; stderr: %s", output.ExitValidation, got, errBuf)
@@ -382,7 +427,7 @@ func TestAppsCreate_ExplicitTeam_BySlug(t *testing.T) {
 	srv := newTestServer(t, mux)
 	outBuf, _, exec := newTestRoot(t, srv)
 
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--team", "admins", "--org", "acme")
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--team", "admins", "--org", "acme")
 
 	if got := exitCode(err); got != output.ExitOK {
 		t.Errorf("explicit team by slug: want exit 0, got %d", got)
@@ -406,7 +451,7 @@ func TestAppsCreate_MissingRuntime_ExitValidation(t *testing.T) {
 	_, errBuf, exec := newTestRoot(t, srv)
 
 	// --type api requires --runtime; omit it to trigger client-side validation.
-	err := exec("apps", "create", "--name", "my-api", "--type", "api", "--region", "us-east-1", "--org", "acme")
+	err := exec("apps", "create", "--name", "my-api", "--type", "api", "--region", "eu-central-1", "--org", "acme")
 
 	if got := exitCode(err); got != output.ExitValidation {
 		t.Errorf("missing runtime: want exit %d, got %d; stderr: %s", output.ExitValidation, got, errBuf)
@@ -447,7 +492,7 @@ func TestAppsCreate_Wait_DomainActive_ExitOK(t *testing.T) {
 	srv := newTestServer(t, mux)
 	outBuf, _, exec := newTestRoot(t, srv)
 
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--org", "acme",
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
 		"--wait", "--wait-interval", "1ms", "--wait-timeout", "5s")
 
 	if got := exitCode(err); got != output.ExitOK {
@@ -477,7 +522,7 @@ func TestAppsCreate_Wait_DomainFailed_ExitGeneral(t *testing.T) {
 	srv := newTestServer(t, mux)
 	_, errBuf, exec := newTestRoot(t, srv)
 
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--org", "acme",
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
 		"--wait", "--wait-interval", "1ms", "--wait-timeout", "5s")
 
 	if got := exitCode(err); got != output.ExitGeneral {
@@ -509,7 +554,7 @@ func TestAppsCreate_Wait_Timeout_ExitGeneral(t *testing.T) {
 	_, errBuf, exec := newTestRoot(t, srv)
 
 	// 1ms interval, 10ms timeout → forces timeout quickly.
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--org", "acme",
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
 		"--wait", "--wait-interval", "1ms", "--wait-timeout", "10ms")
 
 	if got := exitCode(err); got != output.ExitGeneral {
@@ -548,7 +593,7 @@ func TestAppsCreate_ExplicitTeam_ByID(t *testing.T) {
 	outBuf, _, exec := newTestRoot(t, srv)
 
 	// Pass the raw UUID (not slug) of the second team.
-	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "us-east-1", "--team", "team-uuid-2", "--org", "acme")
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--team", "team-uuid-2", "--org", "acme")
 
 	if got := exitCode(err); got != output.ExitOK {
 		t.Errorf("explicit team by id: want exit 0, got %d", got)
@@ -597,7 +642,7 @@ func TestAppsDelete_DispatchFailed(t *testing.T) {
 
 func TestAppsList_URL_ComposedField(t *testing.T) {
 	// App with subdomain "my-app" → url must appear in apps list JSON output.
-	const appsJSON = `[{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"us-east-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
+	const appsJSON = `[{"id":"app-1","org_id":"org-1","name":"my-app","label":"my-app","type":"web","aws_region":"eu-central-1","github_repo_full":"","github_branch":"main","subdomain":"my-app","domain_status":"active","visibility":"private","is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
 	handler := orgsAndAppsHandler("acme", "org-1", appsJSON, "")
 	srv := newTestServer(t, handler)
 	outBuf, _, exec := newTestRoot(t, srv)
