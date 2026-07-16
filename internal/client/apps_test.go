@@ -52,7 +52,7 @@ func TestCreateApp_Success(t *testing.T) {
 		Name:   "my-api",
 		TeamID: "team-1",
 		Type:   "web",
-		Region: "us-east-1",
+		Region: "eu-central-1",
 	}
 	app, err := c.CreateApp(context.Background(), "org-1", req)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestCreateApp_OmitemptyFields(t *testing.T) {
 		Name:   "my-api",
 		TeamID: "team-1",
 		Type:   "web",
-		Region: "us-east-1",
+		Region: "eu-central-1",
 	}
 	_, err := c.CreateApp(context.Background(), "org-1", req)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestCreateApp_ErrorPassthrough(t *testing.T) {
 		Name:   "taken",
 		TeamID: "team-1",
 		Type:   "web",
-		Region: "us-east-1",
+		Region: "eu-central-1",
 	}
 	_, err := c.CreateApp(context.Background(), "org-1", req)
 	if err == nil {

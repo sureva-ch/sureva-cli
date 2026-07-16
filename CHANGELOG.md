@@ -5,7 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [0.10.0] - 2026-07-14
+## [0.10.1] - 2026-07-15
+
+### Fixed
+
+- `apps create --region` help and README now list the current supported regions
+  `eu-central-1` and `eu-central-2`. They previously advertised the retired
+  `us-east-1|us-east-2|sa-east-1` regions, which the API rejects.
+
+### Added
+
+- `apps create` now validates `--region` client-side, failing fast with a clear
+  validation error when the region is missing or unsupported (mirrors the
+  existing `--runtime` check) instead of deferring to a server-side rejection.
 
 ### Added
 

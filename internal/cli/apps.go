@@ -27,7 +27,7 @@ AGENT USAGE
   Default output is JSON. Pipe to jq for field extraction:
     sureva apps list | jq '.[].id'
     sureva apps get <app-id> --org <slug> | jq '.subdomain'
-    sureva apps create --name my-app --type web --region us-east-1 --org <slug>`,
+    sureva apps create --name my-app --type web --region eu-central-1 --org <slug>`,
 	}
 	apps.AddCommand(newAppsListCmd())
 	apps.AddCommand(newAppsGetCmd())
@@ -151,7 +151,7 @@ VALIDATION / INPUTS
   --name: slug, 1-50 chars, lowercase letters, digits, and hyphens; must start
           and end with a letter or digit (example: my-app).
   --type: one of web|web-ssr|api|sse.
-  --region: one of us-east-1|us-east-2|sa-east-1.
+  --region: one of eu-central-1|eu-central-2.
   --runtime: required when --type is not web; one of nodejs24|python314|go126.
   --team: team slug or ID; required when the org has multiple teams.
   --wait-interval/--wait-timeout: Go duration strings (examples: 1s, 30s, 5m).
@@ -176,6 +176,18 @@ VALIDATION / INPUTS
 			if appType != "web" && runtime == "" {
 				r.RenderError(
 					"--runtime is required when --type is not 'web' (valid values: nodejs24|python314|go126)",
+					"validation_error",
+					-1,
+				)
+				return &ExitError{Code: output.ExitValidation}
+			}
+
+			// Client-side validation: --region must be a supported app region.
+			switch region {
+			case "eu-central-1", "eu-central-2":
+			default:
+				r.RenderError(
+					"--region is required and must be one of eu-central-1|eu-central-2",
 					"validation_error",
 					-1,
 				)
@@ -256,7 +268,7 @@ VALIDATION / INPUTS
 
 	cmd.Flags().String("name", "", "Application slug: 1-50 lowercase letters, digits, hyphens; starts/ends alphanumeric (required)")
 	cmd.Flags().String("type", "", "Application type: one of web|web-ssr|api|sse (required)")
-	cmd.Flags().String("region", "", "AWS region: one of us-east-1|us-east-2|sa-east-1 (required)")
+	cmd.Flags().String("region", "", "AWS region: one of eu-central-1|eu-central-2 (required)")
 	cmd.Flags().String("runtime", "", "Runtime: one of nodejs24|python314|go126; required when --type is not web")
 	cmd.Flags().String("team", "", "Team slug or ID; required when org has multiple teams, auto-selected when exactly one team exists")
 	cmd.Flags().Bool("wait", false, "Wait for domain to become active before returning")
