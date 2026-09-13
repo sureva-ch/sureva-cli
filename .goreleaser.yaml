@@ -1,0 +1,60 @@
+version: 2
+
+project_name: sureva
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sureva
+    main: ./cmd/sureva
+    binary: sureva
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/sureva-ch/sureva-cli/internal/version.Version={{.Version}}
+      - -X github.com/sureva-ch/sureva-cli/internal/version.Commit={{.Commit}}
+      - -X github.com/sureva-ch/sureva-cli/internal/version.BuiltAt={{.Date}}
+      - -X github.com/sureva-ch/sureva-cli/internal/credentials.DefaultCognitoClientID={{.Env.SUREVA_COGNITO_CLIENT_ID}}
+
+archives:
+  - id: sureva
+    ids:
+      - sureva
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "sureva_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+# Homebrew cask and Scoop bucket distribution are deferred. The initial releases
+# ship the multi-platform binaries and checksums on the GitHub Release, which is
+# also the source used by `sureva upgrade`. Adding a cask requires a public
+# sureva-ch/homebrew-tap repo + HOMEBREW_TAP_GITHUB_TOKEN; Scoop requires a public
+# sureva-ch/scoop-bucket repo + SCOOP_BUCKET_GITHUB_TOKEN.
