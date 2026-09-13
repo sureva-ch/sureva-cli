@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// DefaultPorts are the loopback ports tried in order (see docs/cognito-cli-client.md in the cloud-api repo).
+// DefaultPorts are the loopback ports tried in order. The Cognito app client
+// must register a callback for each (see docs/cognito-cli-client.md).
 var DefaultPorts = []int{8976, 8977, 8978}
 
 // DefaultTimeout bounds how long the server waits for the callback.

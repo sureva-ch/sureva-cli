@@ -25,6 +25,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `APIError.ServerCode` exposes the API's own error code. `APIError.Code` stays
   derived from the HTTP status, unchanged, since scripts consume it.
 
+### Fixed
+
+- The Cognito provisioning configuration now targets the `us-east-2` user pools
+  that replaced the retired `eu-central-2` pools on 2026-08-24 (#1).
+- The provisioning script creates a Managed Login branding style only when the
+  domain uses Managed Login version 2 and the client has none. It no longer
+  overwrites an existing style, and it fails on branding lookup errors other
+  than "not found" instead of treating them as absence.
+- `go test` now fails if the provisioning script's callback URLs drift from
+  the loopback ports the CLI binds.
+
 ## [0.10.1] - 2026-07-15
 
 ### Fixed

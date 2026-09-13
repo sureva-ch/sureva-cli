@@ -18,7 +18,7 @@ file, which takes precedence over the compiled-in default:
 ```sh
 SUREVA_API_URL=https://api.dev.sureva.com \
 SUREVA_COGNITO_DOMAIN=https://auth.dev.sureva.com \
-SUREVA_COGNITO_CLIENT_ID=64e3vqqstenra0h3o92986tit6 \
+SUREVA_COGNITO_CLIENT_ID=3aochit9b7f1f58m0c1cgffa1k \
   sureva login
 ```
 
@@ -33,10 +33,25 @@ ENVIRONMENT=prod bash scripts/provision-cognito-cli-client.sh
 ENVIRONMENT=dev  bash scripts/provision-cognito-cli-client.sh
 ```
 
-| `ENVIRONMENT` | User pool | Client name | Login domain |
-|---|---|---|---|
-| `prod` | `eu-central-2_NcwrZjuL3` | `sureva-cli` | `auth.sureva.com` |
-| `dev` | `eu-central-2_UR0k0FVwr` | `sureva-cli-dev` | `auth.dev.sureva.com` |
+| `ENVIRONMENT` | User pool | Client name | Client ID | Login domain | Managed Login |
+|---|---|---|---|---|---|
+| `prod` | `us-east-2_cpg7ZyK2M` | `sureva-cli` | `iugfo9d24630c3i0e03dr52ag` | `auth.sureva.com` | version 2 |
+| `dev` | `us-east-2_DRIUL20UO` | `sureva-cli-dev` | `3aochit9b7f1f58m0c1cgffa1k` | `auth.dev.sureva.com` | version 1 |
+
+Region is `us-east-2`. The `eu-central-2` pools were retired in the 2026-08-24
+cutover and no longer exist.
+
+`update-user-pool-client` **replaces** the whole client; every omitted field
+resets to its default. The script builds updates from a
+`describe-user-pool-client` snapshot. Never hand-run a partial update.
+
+### Managed Login version 2 needs a branding style per client
+
+On a version 2 domain (prod), a client without a branding style shows "Login
+pages unavailable" instead of the sign-in page, while `/oauth2/authorize`
+still answers `302` to `/login`, so `curl` cannot detect it. The script
+creates a style with Cognito-provided values only when none exists, and never
+modifies an existing one.
 
 ### Callback URLs are matched as exact strings
 
@@ -46,7 +61,9 @@ three ports `internal/authflow` binds, and the literal host
 `redirect_uri` byte-for-byte, so registering `localhost` instead of `127.0.0.1`
 fails **every** login with `error=redirect_mismatch`, even though the two
 resolve to the same address. The dev client was initially registered with
-`localhost` and hit exactly this.
+`localhost` and hit exactly this, and so did both clients after the 2026-08-24
+cutover (issue #1). `internal/authflow/provision_script_test.go` fails
+`go test` if the script's callback list drifts from `authflow.DefaultPorts`.
 
 ## Conventions
 

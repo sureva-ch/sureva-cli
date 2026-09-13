@@ -19,21 +19,21 @@ export PROJECT="sureva"
 export APP="sureva-cli"
 export ENVIRONMENT="${ENVIRONMENT:?set ENVIRONMENT (dev|prod)}"
 
-export REGION="${AWS_REGION:-eu-central-2}"
+export REGION="${AWS_REGION:-us-east-2}"
 export EXPECTED_ACCOUNT="${EXPECTED_ACCOUNT:-255398768146}"
 
 case "$ENVIRONMENT" in
   prod)
     ENV_TAG="production"
     NAME_SUFFIX=""
-    USER_POOL_ID="eu-central-2_NcwrZjuL3"
+    USER_POOL_ID="us-east-2_cpg7ZyK2M"
     LOGIN_DOMAIN="auth.sureva.com"
     API_URL="https://api.sureva.com"
     ;;
   dev)
     ENV_TAG="development"
     NAME_SUFFIX="-dev"
-    USER_POOL_ID="eu-central-2_UR0k0FVwr"
+    USER_POOL_ID="us-east-2_DRIUL20UO"
     LOGIN_DOMAIN="auth.dev.sureva.com"
     API_URL="https://api.dev.sureva.com"
     ;;

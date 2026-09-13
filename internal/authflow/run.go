@@ -66,7 +66,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, err
 	}
 
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", listener.Port())
+	redirectURI := callbackURL(listener.Port())
 	authorizeURL := buildAuthorizeURL(cfg.CognitoDomain, cfg.ClientID, redirectURI, p.Challenge, state)
 
 	writer := cfg.Writer
@@ -106,6 +106,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	return &Result{IDToken: idToken}, nil
+}
+
+// callbackURL is the redirect_uri for a bound loopback port. Cognito matches
+// it as an exact string, so scripts/provision-cognito-cli-client.sh must
+// register this value for every port in DefaultPorts (see
+// provision_script_test.go).
+func callbackURL(port int) string {
+	return fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 }
 
 // buildAuthorizeURL constructs the Cognito /oauth2/authorize URL for one

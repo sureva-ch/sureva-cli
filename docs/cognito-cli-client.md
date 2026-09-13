@@ -12,12 +12,13 @@
 rather than targeting production. `infra/lib/config.sh` maps it to the pool,
 client name and login domain:
 
-| `ENVIRONMENT` | User pool | Client name | Login domain |
-|---|---|---|---|
-| `prod` | `eu-central-2_NcwrZjuL3` | `sureva-cli` | `auth.sureva.com` |
-| `dev` | `eu-central-2_UR0k0FVwr` | `sureva-cli-dev` | `auth.dev.sureva.com` |
+| `ENVIRONMENT` | User pool | Client name | Client ID | Login domain | Managed Login |
+|---|---|---|---|---|---|
+| `prod` | `us-east-2_cpg7ZyK2M` | `sureva-cli` | `iugfo9d24630c3i0e03dr52ag` | `auth.sureva.com` | version 2 |
+| `dev` | `us-east-2_DRIUL20UO` | `sureva-cli-dev` | `3aochit9b7f1f58m0c1cgffa1k` | `auth.dev.sureva.com` | version 1 |
 
-The script fails closed unless it finds the expected account, region `eu-central-2`, the environment's user pool, and its active login domain. It never prints a token or client secret.
+The identity moved from `eu-central-2` to `us-east-2` on 2026-08-24; the
+`eu-central-2` pools no longer exist. The script fails closed unless it finds the expected account, region `us-east-2`, the environment's user pool, and its active login domain. It never prints a token or client secret.
 
 ## Pointing the CLI at a non-production environment
 
@@ -33,7 +34,7 @@ build or profile switch is needed:
 ```sh
 SUREVA_API_URL=https://api.dev.sureva.com \
 SUREVA_COGNITO_DOMAIN=https://auth.dev.sureva.com \
-SUREVA_COGNITO_CLIENT_ID=64e3vqqstenra0h3o92986tit6 \
+SUREVA_COGNITO_CLIENT_ID=3aochit9b7f1f58m0c1cgffa1k \
   sureva login
 ```
 
@@ -48,7 +49,13 @@ three ports `internal/authflow` binds, and the literal host
 `redirect_uri` byte-for-byte, so registering `localhost` instead of `127.0.0.1`
 fails every login with `error=redirect_mismatch` even though the two resolve to
 the same address. The dev client was initially registered with `localhost` and
-hit exactly this.
+hit exactly this, and so did both clients after the 2026-08-24 cutover
+(issue #1).
+
+The script registers exactly these three URLs and removes any other callback,
+such as a leftover `http://localhost:8976/callback`, on its next run.
+`internal/authflow/provision_script_test.go` fails `go test` if the script's
+list drifts from `authflow.DefaultPorts`.
 
 If PAT validation or local persistence fails after minting, `sureva login`
 attempts to revoke the new PAT without replacing any existing local token. A
@@ -60,7 +67,7 @@ revoke any orphaned token during incident cleanup.
 
 | Setting | Value |
 |---|---|
-| Name | `sureva-cli` |
+| Name | `sureva-cli` (`sureva-cli-dev` in dev) |
 | Client type | Public; `GenerateSecret=false` |
 | OAuth grant | Authorization code only |
 | PKCE | S256, enforced by the CLI flow |
@@ -68,9 +75,17 @@ revoke any orphaned token during incident cleanup.
 | Identity provider | `COGNITO` |
 | Callbacks | `http://127.0.0.1:8976/callback`, `http://127.0.0.1:8977/callback`, `http://127.0.0.1:8978/callback` |
 | Token revocation | Enabled |
-| Managed Login | Cognito-provided default branding |
+| Managed Login | A branding style for the client when the domain uses Managed Login version 2 |
 
-`AllowedOAuthFlowsUserPoolClient` must be enabled or Cognito ignores the callback, scopes, and OAuth flow configuration. API-created clients do not receive Managed Login branding automatically, so the script explicitly creates or updates the branding with Cognito-provided values.
+`AllowedOAuthFlowsUserPoolClient` must be enabled or Cognito ignores the callback, scopes, and OAuth flow configuration.
+
+`update-user-pool-client` replaces the whole client and resets every omitted field to its default. When the client already exists, the script builds the update from a `describe-user-pool-client` snapshot and overrides only the fields in this table.
+
+### Managed Login version 2 needs a branding style per client
+
+Under Managed Login version 2, an app client without a branding style shows "Login pages unavailable. Please contact an administrator." instead of the sign-in page. `curl` does not reveal this: `/oauth2/authorize` still answers `302` to `/login`. API-created clients get no style automatically.
+
+When `describe-user-pool-domain` reports `ManagedLoginVersion: 2`, the script checks `describe-managed-login-branding-by-client`. If that returns `ResourceNotFoundException`, it creates a style with `--use-cognito-provided-values`. An existing style is never modified, because it may carry custom branding. Version 1 domains (classic hosted UI) need no style, and the script skips the step.
 
 ## Runtime trust boundary
 
@@ -82,5 +97,6 @@ The API currently accepts valid ID tokens from any app client in this user pool.
 
 - The client description contains no `ClientSecret`.
 - The three callback URLs match exactly; wildcard and non-loopback callbacks are absent.
+- On a Managed Login version 2 domain, `describe-managed-login-branding-by-client` returns a style for the client.
 - A release fails before packaging when `SUREVA_COGNITO_CLIENT_ID` is empty.
 - `sureva login` completes, while a failed re-login preserves the previous PAT.

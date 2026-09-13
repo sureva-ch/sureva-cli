@@ -9,8 +9,13 @@ set -euo pipefail
 # pool, so this script could not be run against dev at all — not even with an
 # override.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../infra/lib/config.sh
+# shellcheck source=SCRIPTDIR/../infra/lib/config.sh
 source "${SCRIPT_DIR}/../infra/lib/config.sh"
+# The only callback list in this script: create, update and validation all use
+# it. It must hold exactly the redirect_uri the CLI builds for each port in
+# authflow.DefaultPorts (internal/authflow/server.go). Cognito matches
+# redirect_uri as an exact string, so `localhost` does not satisfy 127.0.0.1.
+# internal/authflow/provision_script_test.go fails `go test` on drift.
 readonly CALLBACKS=(
   "http://127.0.0.1:8976/callback"
   "http://127.0.0.1:8977/callback"
@@ -19,6 +24,8 @@ readonly CALLBACKS=(
 
 command -v aws >/dev/null || { echo "aws CLI is required" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
+
+callbacks_json="$(jq -nc '$ARGS.positional' --args "${CALLBACKS[@]}")"
 
 account="$(aws sts get-caller-identity --query Account --output text)"
 test "$account" = "$EXPECTED_ACCOUNT" || {
@@ -44,6 +51,7 @@ test "$(jq -r '.DomainDescription.Status // empty' <<<"$domain_description")" = 
   echo "Managed Login domain is not ACTIVE" >&2
   exit 1
 }
+managed_login_version="$(jq -r '.DomainDescription.ManagedLoginVersion // 1' <<<"$domain_description")"
 
 client_id="$(aws cognito-idp list-user-pool-clients \
   --region "$REGION" --user-pool-id "$USER_POOL_ID" --max-results 60 \
@@ -70,11 +78,7 @@ if [[ -z "$client_id" || "$client_id" = "None" ]]; then
   jq -n \
     --arg pool "$USER_POOL_ID" \
     --arg name "$CLIENT_NAME" \
-    --argjson callbacks '[
-      "http://127.0.0.1:8976/callback",
-      "http://127.0.0.1:8977/callback",
-      "http://127.0.0.1:8978/callback"
-    ]' \
+    --argjson callbacks "$callbacks_json" \
     '{
       UserPoolId: $pool,
       ClientName: $name,
@@ -92,14 +96,13 @@ if [[ -z "$client_id" || "$client_id" = "None" ]]; then
     --query 'UserPoolClient.ClientId' --output text)"
   action="created"
 else
-  # update-user-pool-client resets omitted values. Start from the complete
-  # current client, remove response-only/immutable fields, then set every
-  # field owned by this flow so unrelated validity/attribute settings survive.
-  jq --argjson callbacks '[
-        "http://127.0.0.1:8976/callback",
-        "http://127.0.0.1:8977/callback",
-        "http://127.0.0.1:8978/callback"
-      ]' '
+  # update-user-pool-client replaces the whole client: every omitted field is
+  # reset to its default. Start from the complete describe-user-pool-client
+  # snapshot taken above, remove response-only fields, then set every field
+  # owned by this flow so unrelated validity/attribute settings survive.
+  # CallbackURLs is replaced outright, so any callback outside CALLBACKS is
+  # removed.
+  jq --argjson callbacks "$callbacks_json" '
       .UserPoolClient
       | del(.ClientSecret, .LastModifiedDate, .CreationDate)
       | .AllowedOAuthFlowsUserPoolClient = true
@@ -129,7 +132,7 @@ test "$(jq -r '.UserPoolClient | has("ClientSecret")' <<<"$client")" = "false" |
   exit 1
 }
 test "$(jq -c '.UserPoolClient.CallbackURLs | sort' <<<"$client")" = \
-  "$(printf '%s\n' "${CALLBACKS[@]}" | jq -Rsc 'split("\n")[:-1] | sort')" || {
+  "$(jq -c 'sort' <<<"$callbacks_json")" || {
   echo "Cognito callback validation failed" >&2
   exit 1
 }
@@ -139,24 +142,32 @@ test "$(jq -c '.UserPoolClient.SupportedIdentityProviders | sort' <<<"$client")"
 test "$(jq -r '.UserPoolClient.AllowedOAuthFlowsUserPoolClient' <<<"$client")" = "true"
 test "$(jq -r '.UserPoolClient.EnableTokenRevocation' <<<"$client")" = "true"
 
-# `list-managed-login-branding-by-client` is not a real cognito-idp operation —
-# the call failed under `set -e` in EVERY environment, so this branch had never
-# run. The real one is `describe-...`, which raises ResourceNotFoundException
-# rather than returning an empty list when no branding exists, so absence must
-# be caught rather than tested for.
-branding_id="$(aws cognito-idp describe-managed-login-branding-by-client \
-  --region "$REGION" --user-pool-id "$USER_POOL_ID" --client-id "$client_id" \
-  --query 'ManagedLoginBranding.ManagedLoginBrandingId' --output text 2>/dev/null || true)"
-if [[ -z "$branding_id" || "$branding_id" = "None" ]]; then
-  aws cognito-idp create-managed-login-branding \
+# Under Managed Login version 2, an app client without a branding style gets
+# "Login pages unavailable" instead of the sign-in page. /oauth2/authorize still
+# answers 302 to /login, so no HTTP-level check reveals it. Version 1 (classic
+# hosted UI) does not use branding styles.
+#
+# `describe-managed-login-branding-by-client` raises ResourceNotFoundException
+# when the client has no style, so absence must be caught rather than tested
+# for; any other failure aborts. An existing style may carry custom branding,
+# so it is never modified.
+branding_action="not required (Managed Login version $managed_login_version)"
+if [[ "$managed_login_version" = "2" ]]; then
+  if branding_error="$(aws cognito-idp describe-managed-login-branding-by-client \
     --region "$REGION" --user-pool-id "$USER_POOL_ID" --client-id "$client_id" \
-    --use-cognito-provided-values >/dev/null
-else
-  aws cognito-idp update-managed-login-branding \
-    --region "$REGION" --user-pool-id "$USER_POOL_ID" \
-    --managed-login-branding-id "$branding_id" \
-    --use-cognito-provided-values >/dev/null
+    2>&1 >/dev/null)"; then
+    branding_action="kept existing"
+  elif [[ "$branding_error" == *ResourceNotFoundException* ]]; then
+    aws cognito-idp create-managed-login-branding \
+      --region "$REGION" --user-pool-id "$USER_POOL_ID" --client-id "$client_id" \
+      --use-cognito-provided-values >/dev/null
+    branding_action="created with Cognito-provided values"
+  else
+    echo "Managed Login branding lookup failed" >&2
+    exit 1
+  fi
 fi
 
 printf 'Cognito CLI client %s: %s\n' "$action" "$client_id"
+printf 'Managed Login branding: %s\n' "$branding_action"
 printf 'Set the GitHub Actions variable SUREVA_COGNITO_CLIENT_ID to this public client ID.\n'
