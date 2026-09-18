@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The README's install instructions now work. The quickstart told readers to
+  `go install`, which builds a binary without the Cognito app client, so
+  `sureva login` fails with `validation_error: cognito client id not
+  configured`. It now downloads the latest release build, and that exact
+  snippet was run: it installs 0.1.1 with the production client embedded. The
+  "Install with Go" section now says a source build needs
+  `SUREVA_COGNITO_CLIENT_ID`, and gives the public production value. With it
+  set, a source build starts the login against `auth.sureva.com`.
+- The README no longer offers Homebrew. `brew install --cask
+  sureva-ch/tap/sureva` fails with "Cask is unavailable": `.goreleaser.yaml`
+  publishes no cask and there is no `sureva-ch/tap` repository. Homebrew is
+  now listed as planned, beside Scoop.
+
 ## [0.1.1] - 2026-09-13
 
 ### Fixed

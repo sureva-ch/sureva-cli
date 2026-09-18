@@ -5,8 +5,12 @@ Agent-first command-line interface for the Sureva cloud platform.
 ## Quickstart (agents and CI)
 
 ```bash
-# 1. Install
-go install github.com/sureva-ch/sureva-cli/cmd/sureva@latest
+# 1. Install the latest release build (macOS/Linux; Windows and details under "Install")
+PLATFORM=darwin_arm64   # or darwin_amd64, linux_amd64, linux_arm64
+VERSION=$(curl -fsSL https://api.github.com/repos/sureva-ch/sureva-cli/releases/latest \
+  | sed -n 's/.*"tag_name": "v\{0,1\}\([^"]*\)".*/\1/p')
+curl -fsSL "https://github.com/sureva-ch/sureva-cli/releases/latest/download/sureva_${VERSION}_${PLATFORM}.tar.gz" \
+  | tar -xz && sudo mv sureva /usr/local/bin/
 
 # 2. Authenticate interactively
 sureva login
@@ -45,19 +49,6 @@ Exit codes:
 | 5 | network error (no HTTP response) |
 
 ## Install
-
-### Install with Homebrew
-
-```bash
-brew install --cask sureva-ch/tap/sureva
-```
-
-Upgrade or uninstall with standard Homebrew commands:
-
-```bash
-brew upgrade --cask sureva
-brew uninstall --cask sureva
-```
 
 ### Download a release binary (recommended)
 
@@ -113,10 +104,28 @@ go install github.com/sureva-ch/sureva-cli/cmd/sureva@latest
 Requires Go 1.25.11 or later, matching `go.mod`. The binary is placed in
 `$GOBIN` (default `~/go/bin`).
 
+**A source build cannot log in on its own.** Release builds compile in the
+public Cognito app client ID. `go install` does not, so `sureva login` fails
+with `validation_error: cognito client id not configured`. Give it the
+production client ID, which is public and secretless:
+
+```bash
+export SUREVA_COGNITO_CLIENT_ID=iugfo9d24630c3i0e03dr52ag
+sureva login
+```
+
+You can also set `cognito_client_id` in the config file. The development
+values, and how the client is provisioned, are in
+[`docs/cognito-cli-client.md`](docs/cognito-cli-client.md). Use a release build
+unless you need to build from source.
+
 ### Package managers
 
-Scoop bucket distribution is planned but not available yet. Follow the releases
-page for announcements.
+Homebrew and Scoop distribution are planned but not available yet: there is no
+`sureva-ch/tap` tap, and `brew install --cask sureva-ch/tap/sureva` fails with
+"Cask is unavailable". Follow the releases page for announcements. `sureva
+upgrade` already recognises a Homebrew install and defers to `brew upgrade`, so
+nothing changes for the CLI when the tap ships.
 
 ## Authentication
 
