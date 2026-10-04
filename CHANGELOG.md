@@ -11,13 +11,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   upload-backed app, waits for the archive to be validated and deploys the
   release, with `--org`, `--env-id` and `--wait` / `--wait-interval` /
   `--wait-timeout` as in `deploys trigger`. `node_modules/`, `.git/` and `.env*`
-  are always excluded; `.gitignore` and `.surevaignore` are honoured and
+  are always excluded, whatever their letter case; `.gitignore` and `.surevaignore` are honoured and
   symlinks are skipped. The JSON output reports the exclusions, the archive size
   and the release; an archive over the API's limit is refused before the upload.
   Failures carry distinct envelope codes (`archive_too_large`,
   `source_rejected`, `validation_timeout`, `deploy_failed`, `github_backed_app`,
-  ...), and a failed deployment includes the `sureva logs` command to fetch its
-  logs. Adds the `github.com/sabhiram/go-gitignore` dependency (MIT).
+  `pack_failed`, `interrupted`, ...), and Ctrl-C or SIGTERM stops the deploy and
+  removes the temporary archive. A failed deployment includes the `sureva logs`
+  command to fetch its logs. Adds the `github.com/sabhiram/go-gitignore` dependency (MIT).
 - `apps get`, `apps list` and `apps create` show `source_type` (`github` or
   `upload`) when the API sends it. The read endpoints do not send it until
   sureva-ch/cloud-api#345 ships, so an app without the field is unknown, not

@@ -228,3 +228,102 @@ func TestLargest(t *testing.T) {
 		t.Errorf("Largest(1) = %v, want big.bin", l)
 	}
 }
+
+// packBoth packs root in walk mode and, when git is available, in git mode,
+// and returns the archive entries for each mode. Each case builds its own
+// tree, so two names that differ only by case never collide on disk.
+func packBoth(t *testing.T, root string) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	a, err := Pack(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Remove()
+	out["walk"] = names(t, a)
+
+	if _, err := exec.LookPath("git"); err != nil {
+		return out
+	}
+	if b, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+		t.Logf("git init: %v %s", err, b)
+		return out
+	}
+	g, err := Pack(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Remove()
+	out["git"] = names(t, g)
+	return out
+}
+
+func TestPack_AlwaysExcludedNames(t *testing.T) {
+	cases := []struct {
+		name string
+		rel  string
+	}{
+		{"env", ".env"},
+		{"env upper", ".ENV"},
+		{"env mixed", ".Env.production"},
+		{"env nested upper", "pkg/.ENV.local"},
+		{"env nested", "config/.env.production"},
+		{"envrc", ".envrc"},
+		{"environment", ".environment"},
+		{"node_modules mixed", "Node_Modules/a.js"},
+		{"node_modules nested", "pkg/node_modules/a.js"},
+		{"git file", "sub/.git"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			write(t, root, "keep.txt", "x", 0o644)
+			write(t, root, tc.rel, "SECRET=1", 0o600)
+			for mode, got := range packBoth(t, root) {
+				if strings.Join(got, ",") != "keep.txt" {
+					t.Errorf("%s mode packed %v, want only keep.txt (%s must be excluded)", mode, got, tc.rel)
+				}
+			}
+		})
+	}
+}
+
+// A directory named .git (any case) holds repository metadata. It is tested
+// in walk mode only: a directory like that inside a git work tree would be a
+// nested repository or corrupt the fixture.
+func TestPack_AlwaysExcludedGitDirectories(t *testing.T) {
+	for _, rel := range []string{".git/config", "pkg/.git/config", ".GIT/config", "pkg/.Git/config"} {
+		t.Run(rel, func(t *testing.T) {
+			root := t.TempDir()
+			write(t, root, "keep.txt", "x", 0o644)
+			write(t, root, rel, "x", 0o644)
+			a, err := Pack(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Remove()
+			if got := strings.Join(names(t, a), ","); got != "keep.txt" {
+				t.Errorf("packed %s, want only keep.txt", got)
+			}
+		})
+	}
+}
+
+func TestPack_SymlinksAreSkipped(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	write(t, outside, "secret.txt", "outside", 0o644)
+	write(t, outside, "dir/inner.txt", "outside", 0o644)
+	write(t, root, "keep.txt", "x", 0o644)
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "file-link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "dir"), filepath.Join(root, "dir-link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for mode, got := range packBoth(t, root) {
+		if strings.Join(got, ",") != "keep.txt" {
+			t.Errorf("%s mode packed %v, want only keep.txt", mode, got)
+		}
+	}
+}

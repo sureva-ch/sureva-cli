@@ -111,7 +111,8 @@ func (a *Archive) Largest(n int) []Entry {
 	return out
 }
 
-// Pack zips dir into a temporary file. Paths inside the archive are relative to
+// Pack zips dir into a temporary file, which is removed again when packing
+// fails or ctx is cancelled. Paths inside the archive are relative to
 // dir, use forward slashes and have no wrapper directory; permission bits are
 // preserved and entries are sorted by path. Symlinks are never followed and
 // never added.
@@ -143,14 +144,14 @@ func Pack(ctx context.Context, dir string) (*Archive, error) {
 	sort.Strings(c.files)
 
 	a := &Archive{Mode: mode, Excluded: c.summary()}
-	if err := a.write(root, c.files); err != nil {
+	if err := a.write(ctx, root, c.files); err != nil {
 		a.Remove()
 		return nil, err
 	}
 	return a, nil
 }
 
-func (a *Archive) write(root string, files []string) (err error) {
+func (a *Archive) write(ctx context.Context, root string, files []string) (err error) {
 	f, err := os.CreateTemp("", "sureva-deploy-*.zip")
 	if err != nil {
 		return fmt.Errorf("create temp archive: %w", err)
@@ -165,6 +166,9 @@ func (a *Archive) write(root string, files []string) (err error) {
 	zw := zip.NewWriter(f)
 	headers := make([]*zip.FileHeader, 0, len(files))
 	for _, rel := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		fh, werr := addFile(zw, root, rel)
 		if werr != nil {
 			return werr
@@ -376,7 +380,9 @@ func displayPath(p string, isDir bool) string {
 func alwaysExcluded(rel string) (string, bool) {
 	parts := strings.Split(rel, "/")
 	for i, name := range parts {
-		if name == "node_modules" || name == ".git" || strings.HasPrefix(name, ".env") {
+		// Case-insensitive: on macOS and Windows, .ENV is the same file as .env.
+		lower := strings.ToLower(name)
+		if lower == "node_modules" || lower == ".git" || strings.HasPrefix(lower, ".env") {
 			prefix := strings.Join(parts[:i+1], "/")
 			if i < len(parts)-1 {
 				prefix += "/"
