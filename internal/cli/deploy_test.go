@@ -19,6 +19,7 @@ import (
 
 	"github.com/sureva-ch/sureva-cli/internal/cli"
 	"github.com/sureva-ch/sureva-cli/internal/output"
+	"github.com/sureva-ch/sureva-cli/internal/sourcebase"
 )
 
 const (
@@ -256,6 +257,70 @@ func TestDeploy_HappyPath(t *testing.T) {
 	by, _ := exc["by_reason"].(map[string]any)
 	if by["always_excluded"].(float64) != 3 || by["symlink"].(float64) != 1 || by["surevaignore"].(float64) != 1 {
 		t.Errorf("excluded by_reason = %v", by)
+	}
+}
+
+// A directory filled by `sources pull` reports the release it was based on, and
+// never uploads or sends it: the API does not accept a base yet.
+func TestDeploy_ReportsTheBaseReleaseWithoutSendingIt(t *testing.T) {
+	f := newDeployFake(t)
+	dir := deployProject(t)
+	if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: testAppID, SourceID: "src-base", ReleaseTag: "src-2", SHA256: "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+	if err := exec(deployArgs(dir, "--wait")...); exitCode(err) != 0 {
+		t.Fatalf("exit %d: %s", exitCode(err), errBuf)
+	}
+
+	if errBuf.Len() != 0 {
+		t.Errorf("stderr should stay empty, got: %s", errBuf)
+	}
+	if got := decodeJSON(t, outBuf)["base_source_id"]; got != "src-base" {
+		t.Errorf("base_source_id = %v, want src-base", got)
+	}
+	if got := strings.Join(f.zipNames(), ","); got != ".surevaignore,index.js,src/app.js" {
+		t.Errorf("archive entries = %s; .sureva/ must never be uploaded", got)
+	}
+	for key := range f.deployBody {
+		if strings.Contains(key, "base") {
+			t.Errorf("the deployment request carries %q; the base must not be sent", key)
+		}
+	}
+}
+
+func TestDeploy_NoBaseWhenNotPulledOrPulledForAnotherApp(t *testing.T) {
+	cases := map[string]func(t *testing.T, dir string){
+		"never pulled": func(*testing.T, string) {},
+		"another app": func(t *testing.T, dir string) {
+			if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: "other-app", SourceID: "src-base"}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"damaged record": func(t *testing.T, dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, ".sureva"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(sourcebase.Path(dir), []byte("{broken"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newDeployFake(t)
+			dir := deployProject(t)
+			setup(t, dir)
+			outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+			if err := exec(deployArgs(dir)...); exitCode(err) != 0 {
+				t.Fatalf("exit %d: %s", exitCode(err), errBuf)
+			}
+			if _, has := decodeJSON(t, outBuf)["base_source_id"]; has {
+				t.Error("base_source_id must be absent")
+			}
+		})
 	}
 }
 

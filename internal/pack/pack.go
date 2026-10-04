@@ -2,8 +2,9 @@
 // a directory with the files a remote build must never receive left out.
 //
 // Which files are packed is decided in two layers. A fixed set is always
-// excluded (node_modules, .git, .env*), because dependencies are installed by
-// the remote build and secrets belong in environment variables. On top of that,
+// excluded (node_modules, .git, .env*, .sureva), because dependencies are installed by
+// the remote build and secrets belong in environment variables; .sureva holds the
+// local record of the release a directory was pulled from. On top of that,
 // the project's own ignore rules apply: .gitignore with exact git semantics when
 // the directory is inside a git work tree (the file list comes from git itself),
 // and a gitignore-syntax matcher otherwise. A .surevaignore file adds patterns
@@ -382,7 +383,7 @@ func alwaysExcluded(rel string) (string, bool) {
 	for i, name := range parts {
 		// Case-insensitive: on macOS and Windows, .ENV is the same file as .env.
 		lower := strings.ToLower(name)
-		if lower == "node_modules" || lower == ".git" || strings.HasPrefix(lower, ".env") {
+		if lower == "node_modules" || lower == ".git" || lower == ".sureva" || strings.HasPrefix(lower, ".env") {
 			prefix := strings.Join(parts[:i+1], "/")
 			if i < len(parts)-1 {
 				prefix += "/"
