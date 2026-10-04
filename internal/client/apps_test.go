@@ -250,3 +250,41 @@ func TestCreateApp_ConflictExposesServerCode(t *testing.T) {
 		t.Errorf("Code = %q, want 'api_error' (status-derived, unchanged)", apiErr.Code)
 	}
 }
+
+func TestApp_SourceTypeUnknownWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "upload", body: `{"id":"a","source_type":"upload"}`, want: "upload"},
+		{name: "github", body: `{"id":"a","source_type":"github"}`, want: "github"},
+		// Reads omit the field until cloud-api#345 ships; that is unknown, not github.
+		{name: "absent", body: `{"id":"a"}`, want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			})
+			app, err := c.GetApp(context.Background(), "org-1", "a")
+			if err != nil {
+				t.Fatalf("GetApp: %v", err)
+			}
+			if app.SourceType != tc.want {
+				t.Errorf("SourceType = %q, want %q", app.SourceType, tc.want)
+			}
+			out, _ := json.Marshal(app)
+			var m map[string]any
+			_ = json.Unmarshal(out, &m)
+			if _, present := m["source_type"]; present != (tc.want != "") {
+				t.Errorf("source_type present in output = %v, want %v: %s", present, tc.want != "", out)
+			}
+		})
+	}
+}

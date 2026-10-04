@@ -51,11 +51,15 @@ func (c *Client) DeleteApp(ctx context.Context, orgID, appID string) (*DeleteApp
 
 // App represents a Sureva application.
 type App struct {
-	ID             string    `json:"id"`
-	OrgID          string    `json:"org_id"`
-	Name           string    `json:"name"`
-	Label          string    `json:"label"`
-	Type           string    `json:"type"`
+	ID    string `json:"id"`
+	OrgID string `json:"org_id"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Type  string `json:"type"`
+	// SourceType is "github" or "upload". It stays empty when the API did not
+	// send it (the read endpoints omit it until cloud-api#345 ships), so an
+	// empty value means unknown, never github.
+	SourceType     string    `json:"source_type,omitempty"`
 	Runtime        *string   `json:"runtime"`
 	AWSRegion      string    `json:"aws_region"`
 	GitHubRepoFull string    `json:"github_repo_full"`

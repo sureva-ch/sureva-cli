@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `apps get`, `apps list` and `apps create` show `source_type` (`github` or
+  `upload`) when the API sends it. The read endpoints do not send it until
+  sureva-ch/cloud-api#345 ships, so an app without the field is unknown, not
+  GitHub-backed: the key is omitted in JSON and the column is blank in the
+  table.
+- `apps create --help` states that `--use-existing-repo` only applies to an org
+  with a connected GitHub organization.
+
 ### Fixed
 
 - The README's install instructions now work. The quickstart told readers to

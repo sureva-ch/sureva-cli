@@ -250,6 +250,11 @@ sureva apps delete <app-id> --org <slug> --yes
 ```
 
 **App types**: `web` | `web-ssr` | `api` | `sse`
+
+**Source type**: an app is either GitHub-backed (`source_type: "github"`) or
+upload-backed (`"upload"`, an org without a connected GitHub organization). The
+field is omitted when the API does not report it; treat that as unknown, not as
+`github`. `--use-existing-repo` only applies to GitHub-connected orgs.
 **Runtimes** (required for non-web types): `nodejs24` | `python314` | `go126`
 **Regions**: `eu-central-1` | `eu-central-2`
 

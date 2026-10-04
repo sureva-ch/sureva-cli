@@ -699,3 +699,52 @@ func TestHelpJSON_AppsCreateNameFlagShowsSlugValidation(t *testing.T) {
 		t.Fatalf("help json should expose apps create --name slug validation; output:\n%s", outBuf)
 	}
 }
+
+// ---- source_type on app output ----
+
+func TestApps_SourceType_Shown(t *testing.T) {
+	const appJSON = `{"id":"app-1","org_id":"org-1","name":"my-app","type":"web","source_type":"upload","subdomain":"my-app"}`
+	const noTypeJSON = `{"id":"app-2","org_id":"org-1","name":"old-app","type":"web","subdomain":"old-app"}`
+	srv := newTestServer(t, orgsAndAppsHandler("acme", "org-1", `[`+appJSON+`,`+noTypeJSON+`]`, appJSON))
+
+	t.Run("get json", func(t *testing.T) {
+		outBuf, _, exec := newTestRoot(t, srv)
+		if got := exitCode(exec("apps", "get", "app-1", "--org", "acme")); got != output.ExitOK {
+			t.Fatalf("want exit 0, got %d", got)
+		}
+		var got map[string]any
+		if err := json.NewDecoder(outBuf).Decode(&got); err != nil {
+			t.Fatalf("stdout not JSON: %v", err)
+		}
+		if got["source_type"] != "upload" {
+			t.Errorf("source_type = %v, want upload", got["source_type"])
+		}
+	})
+
+	t.Run("list json omits it when absent", func(t *testing.T) {
+		outBuf, _, exec := newTestRoot(t, srv)
+		if got := exitCode(exec("apps", "list", "--org", "acme")); got != output.ExitOK {
+			t.Fatalf("want exit 0, got %d", got)
+		}
+		var got []map[string]any
+		if err := json.NewDecoder(outBuf).Decode(&got); err != nil {
+			t.Fatalf("stdout not JSON: %v", err)
+		}
+		if got[0]["source_type"] != "upload" {
+			t.Errorf("row 0 source_type = %v, want upload", got[0]["source_type"])
+		}
+		if _, present := got[1]["source_type"]; present {
+			t.Errorf("row 1 must omit source_type, got %v", got[1]["source_type"])
+		}
+	})
+
+	t.Run("list table has the column", func(t *testing.T) {
+		outBuf, _, exec := newTestRoot(t, srv)
+		if got := exitCode(exec("apps", "list", "--org", "acme", "--output", "table")); got != output.ExitOK {
+			t.Fatalf("want exit 0, got %d", got)
+		}
+		if out := outBuf.String(); !strings.Contains(out, "source_type") || !strings.Contains(out, "upload") {
+			t.Errorf("table missing source_type column or value:\n%s", out)
+		}
+	})
+}
