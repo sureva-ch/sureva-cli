@@ -10,8 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `apps get`, `apps list` and `apps create` show `source_type` (`github` or
   `upload`) when the API sends it. The read endpoints do not send it until
   sureva-ch/cloud-api#345 ships, so an app without the field is unknown, not
-  GitHub-backed: the key is omitted in JSON and the column is blank in the
-  table.
+  GitHub-backed: the key is omitted in JSON, and in the table the cell is
+  blank, or the column is absent when no listed app has the field.
 - `sureva sources list <app-id>` and `sureva sources get <app-id> <source-id>`
   show the releases of an upload-backed app: status, release tag, size, sha256,
   availability and, for a rejected archive, its validation error. They appear
