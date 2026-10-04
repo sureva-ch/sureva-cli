@@ -289,6 +289,22 @@ sureva services kvs tables delete <app-id> sessions --org <slug> --yes
 KVS is available for `api`, `web-ssr`, and `sse` apps. Plaintext KVS tokens are
 shown only on enable/create/rotate responses; store them immediately.
 
+### Sources (upload-backed apps)
+
+An upload-backed app has releases instead of a GitHub repository: each accepted
+archive is a release with the tag `src-<seq>` and an id.
+
+```bash
+sureva sources list <app-id> --org <slug>                # releases, newest first
+sureva sources get <app-id> <source-id> --org <slug>     # one release
+```
+
+Each row carries `status` (`pending` | `validating` | `rejected` | `ready` |
+`expired`), `release_tag`, `size_bytes`, `sha256`, `seq`, `created_at`,
+`available` and, for a rejected archive, `validation_error`. `available: false`
+on a `ready` release means its stored version is gone and it can no longer be
+deployed.
+
 ### Deployments
 
 ```bash

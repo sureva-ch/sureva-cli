@@ -116,6 +116,7 @@ GLOBAL FLAG VALIDATION
 	root.AddCommand(NewEnvCmd())
 	root.AddCommand(NewServicesCmd())
 	root.AddCommand(NewDeploysCmd())
+	root.AddCommand(NewSourcesCmd())
 	root.AddCommand(NewLogsCmd())
 	root.AddCommand(NewChangesCmd())
 	root.AddCommand(NewUpgradeCmd())

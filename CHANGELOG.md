@@ -12,6 +12,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sureva-ch/cloud-api#345 ships, so an app without the field is unknown, not
   GitHub-backed: the key is omitted in JSON and the column is blank in the
   table.
+- `sureva sources list <app-id>` and `sureva sources get <app-id> <source-id>`
+  show the releases of an upload-backed app: status, release tag, size, sha256,
+  availability and, for a rejected archive, its validation error. They appear
+  in `sureva --help --json`.
 - `apps create --help` states that `--use-existing-repo` only applies to an org
   with a connected GitHub organization.
 
