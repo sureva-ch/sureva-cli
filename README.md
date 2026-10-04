@@ -306,6 +306,52 @@ Each row carries `status` (`pending` | `validating` | `rejected` | `ready` |
 on a `ready` release means its stored version is gone and it can no longer be
 deployed.
 
+### Deploy a local directory
+
+For an upload-backed app, `deploy` packs a directory, uploads it, waits for the
+platform to validate it and deploys the resulting release in one command:
+
+```bash
+sureva deploy --app <app-id> --org <slug>                 # current directory
+sureva deploy ./site --app <app-id> --org <slug> --env-id <uuid> --wait
+SUREVA_TOKEN=sapi_... sureva deploy --app <app-id> --org <slug> --wait   # CI / agents
+```
+
+`--wait`, `--wait-interval` and `--wait-timeout` behave as in `deploys trigger`;
+the interval also paces the wait for archive validation, which always happens,
+and the timeout bounds the validation wait and the deployment wait separately.
+A GitHub-backed app is refused up front (`github_backed_app`): use
+`deploys trigger` for it.
+
+What is packed: `node_modules/`, `.git/` and `.env*` are always left out, at any
+depth. So is everything `.gitignore` ignores (inside a git work tree the file
+list comes from `git ls-files`, so git's own rules apply; elsewhere `.gitignore`
+files are read during the walk) and everything a `.surevaignore` file in the
+directory lists, which uses the `.gitignore` syntax. Symlinks are skipped, never
+followed. The JSON output reports what was excluded (grouped, with counts) and
+the archive size; the zip is built in a temporary file and removed afterwards.
+An archive over the limit the API reports for the app is refused before the
+upload, naming its largest entries.
+
+stdout is one JSON object: `app_id`, `archive`, `source` (the release, as in
+`sources get`) and `deployment`. After a failure that follows the upload, the
+same object is printed with what completed, next to the error envelope on
+stderr; after a failed deployment it also carries `logs.command`, the `sureva
+logs` command that fetches the logs. Failures an agent should tell apart, by
+the envelope `code`:
+
+| `code` | Exit | Meaning |
+|---|---|---|
+| `auth_error` | 2 | credentials missing or expired |
+| `archive_too_large` | 4 | over the API's limit; nothing was uploaded |
+| `source_rejected` | 4 | validation refused the archive; the reason is in the message and `source.validation_error` |
+| `empty_archive` | 4 | nothing left to pack after the exclusions |
+| `github_backed_app` | 4 | the app deploys from GitHub |
+| `validation_timeout` | 1 | validation did not finish; see `sources get` |
+| `upload_failed` / `upload_expired` | 1 | the storage endpoint refused the archive / the upload form expired |
+| `wait_timeout` | 1 | the deployment did not finish in time |
+| `deploy_failed` | 1 | the deployment failed or was cancelled |
+
 ### Deployments
 
 ```bash
