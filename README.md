@@ -348,6 +348,8 @@ the envelope `code`:
 | `empty_archive` | 4 | nothing left to pack after the exclusions |
 | `github_backed_app` | 4 | the app deploys from GitHub |
 | `validation_timeout` | 1 | validation did not finish; see `sources get` |
+| `pack_failed` | 1 | the directory could not be read or zipped |
+| `interrupted` | 1 | stopped by SIGINT or SIGTERM; the temporary archive was removed |
 | `upload_failed` / `upload_expired` | 1 | the storage endpoint refused the archive / the upload form expired |
 | `wait_timeout` | 1 | the deployment did not finish in time |
 | `deploy_failed` | 1 | the deployment failed or was cancelled |

@@ -55,8 +55,9 @@ EXIT CODES
   source_not_ready (409, release not ready or rejected), deploy_failed (the
   deployment itself failed under --wait). For deploy: archive_too_large,
   source_rejected, empty_archive and github_backed_app exit 4;
-  validation_timeout, upload_failed, upload_expired, wait_timeout and
-  deploy_failed exit 1 (see 'sureva deploy --help').
+  validation_timeout, pack_failed, upload_failed, upload_expired,
+  wait_timeout, deploy_failed and interrupted (SIGINT/SIGTERM) exit 1 (see
+  'sureva deploy --help').
 
 AUTHENTICATION
   Run sureva login for interactive browser authentication.

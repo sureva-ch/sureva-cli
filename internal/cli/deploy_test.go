@@ -3,6 +3,7 @@ package cli_test
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sureva-ch/sureva-cli/internal/cli"
 	"github.com/sureva-ch/sureva-cli/internal/output"
 )
 
@@ -39,6 +41,11 @@ type deployFake struct {
 	deployState []string // statuses GET deployment answers with, last one repeats
 	createCode  int      // overrides POST /sources when set
 	createBody  string
+	// s3Reached, when set, is closed on the first upload request, which then
+	// blocks until s3Release is closed (the body is left unread, so the server
+	// cannot notice the client going away on its own).
+	s3Reached chan struct{}
+	s3Release chan struct{}
 
 	partNames   []string
 	zipBytes    []byte
@@ -113,6 +120,11 @@ func newDeployFake(t *testing.T) *deployFake {
 // serveS3 records the order of the multipart parts and the uploaded bytes, and
 // refuses a request that carries an API credential.
 func (f *deployFake) serveS3(w http.ResponseWriter, r *http.Request) {
+	if f.s3Reached != nil {
+		close(f.s3Reached)
+		<-f.s3Release
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.s3Hits++
@@ -517,9 +529,56 @@ func TestDeployHelpNamesFailureCodes(t *testing.T) {
 	if err := exec("deploy", "--help"); exitCode(err) != 0 {
 		t.Fatalf("exit %d", exitCode(err))
 	}
-	for _, want := range []string{"archive_too_large", "source_rejected", "validation_timeout", "deploy_failed", "auth_error"} {
+	for _, want := range []string{"archive_too_large", "source_rejected", "validation_timeout", "deploy_failed", "auth_error", "pack_failed", "interrupted"} {
 		if !strings.Contains(outBuf.String(), want) {
 			t.Errorf("deploy --help is missing %q", want)
 		}
+	}
+}
+
+// Interrupting a deploy while the archive is uploading must stop the request,
+// remove the temporary archive and report the "interrupted" code. The test
+// cancels the context the way the signal handler does; it sends no signal.
+func TestDeploy_InterruptedDuringUploadRemovesArchive(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	f := newDeployFake(t)
+	f.s3Reached = make(chan struct{})
+	f.s3Release = make(chan struct{})
+	t.Cleanup(func() { close(f.s3Release) }) // runs before the server's Close
+	outBuf, errBuf, _ := newTestRoot(t, f.api)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-f.s3Reached
+		// The archive exists on disk while it is being sent.
+		if m, _ := filepath.Glob(filepath.Join(tmp, "sureva-deploy-*.zip")); len(m) != 1 {
+			t.Errorf("expected the archive on disk during the upload, found %v", m)
+		}
+		cancel()
+	}()
+
+	root := cli.NewRootCmd()
+	root.SetOut(outBuf)
+	root.SetErr(errBuf)
+	root.SetArgs(deployArgs(deployProject(t)))
+	err := root.ExecuteContext(ctx)
+
+	if got := exitCode(err); got != output.ExitGeneral {
+		t.Fatalf("exit = %d, want %d; stderr: %s", got, output.ExitGeneral, errBuf)
+	}
+	var env map[string]any
+	if jerr := json.Unmarshal(errBuf.Bytes(), &env); jerr != nil {
+		t.Fatalf("stderr is not one JSON envelope: %v\n%s", jerr, errBuf)
+	}
+	if env["code"] != "interrupted" {
+		t.Errorf("code = %v, want interrupted; envelope: %s", env["code"], errBuf)
+	}
+	if outBuf.Len() > 0 {
+		decodeJSON(t, outBuf) // stdout, when present, is one valid document
+	}
+	if m, _ := filepath.Glob(filepath.Join(tmp, "sureva-deploy-*.zip")); len(m) != 0 {
+		t.Errorf("temporary archive left behind: %v", m)
 	}
 }

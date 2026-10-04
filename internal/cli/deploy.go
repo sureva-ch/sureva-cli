@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -104,6 +106,10 @@ ERRORS (stderr envelope "code"; exit code in parentheses)
   source_not_ready      (1) the release is not deployable.
   wait_timeout          (1) the deployment did not finish in time.
   deploy_failed         (1) the deployment failed or was cancelled.
+  pack_failed           (1) the directory could not be read or zipped.
+  interrupted           (1) stopped by SIGINT or SIGTERM; the temporary archive
+                        was removed. Anything uploaded before that is reported
+                        in stdout and stays on the platform.
   network_error         (5) no HTTP response.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runDeploy,
@@ -123,7 +129,14 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	waitInterval, _ := cmd.Flags().GetDuration("wait-interval")
 	waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
 
+	// SIGINT and SIGTERM cancel ctx instead of killing the process, so the
+	// deferred cleanup of the temporary archive runs and the in-flight request
+	// and polling stop. Scoped to this command: others keep the default.
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	r := output.NewRenderer(OutputFormat(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr())
+	var res *deployResult
 	fail := func(msg, code string, exit int) error {
 		_ = r.RenderError(msg, code, -1)
 		return &ExitError{Code: exit}
@@ -145,7 +158,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx := cmd.Context()
+
+	// interrupted reports that the signal context was cancelled, with what
+	// completed so far on stdout like any other failure after the upload.
+	interrupted := func() error {
+		if res != nil {
+			_ = r.Render(res)
+		}
+		return fail("interrupted before the deploy finished; the temporary archive was removed", "interrupted", output.ExitGeneral)
+	}
 
 	orgID, err := requireOrgID(ctx, cmd, c, r)
 	if err != nil {
@@ -154,6 +175,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	app, err := c.GetApp(ctx, orgID, appID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return interrupted()
+		}
 		return handleAPIError(r, err)
 	}
 	// An app without source_type predates the field: let the API decide.
@@ -163,6 +187,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	archive, err := pack.Pack(ctx, dir)
 	if err != nil {
+		if ctx.Err() != nil {
+			return interrupted()
+		}
 		if errors.Is(err, pack.ErrEmpty) {
 			return fail("nothing to deploy: no files are left in "+dir+" after node_modules, .git, .env* and the ignore files are applied", "empty_archive", output.ExitValidation)
 		}
@@ -170,7 +197,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	defer archive.Remove()
 
-	res := &deployResult{AppID: appID, Archive: &archiveSummary{
+	res = &deployResult{AppID: appID, Archive: &archiveSummary{
 		SizeBytes: archive.Size,
 		Files:     archive.Files,
 		Packing:   archive.Mode,
@@ -183,6 +210,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fail(msg, code, exit)
 	}
 	apiFail := func(err error) error {
+		if ctx.Err() != nil {
+			return interrupted()
+		}
 		_ = r.Render(res)
 		return handleAPIError(r, err)
 	}
@@ -192,6 +222,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		var apiErr *client.APIError
 		if errors.As(err, &apiErr) && apiErr.HTTPStatus == http.StatusConflict && strings.Contains(apiErr.Message, "linked GitHub repository") {
 			return fail("this app deploys from its linked GitHub repository; use 'deploys trigger' instead of 'deploy'", "github_backed_app", output.ExitValidation)
+		}
+		if ctx.Err() != nil {
+			return interrupted()
 		}
 		return handleAPIError(r, err)
 	}
