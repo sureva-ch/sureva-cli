@@ -95,3 +95,31 @@ func (c *Client) CompleteSource(ctx context.Context, orgID, appID, sourceID stri
 	}
 	return &resp, nil
 }
+
+// LatestSource is the sourceID that selects the app's newest ready release.
+const LatestSource = "latest"
+
+// SourceDownload is what GET .../sources/{id}/download answers with: a
+// short-lived presigned URL for one release archive and the facts needed to
+// verify it. SizeBytes and SHA256 describe the object at URL.
+type SourceDownload struct {
+	// URL is a credential: it grants a read of the archive until ExpiresAt. It
+	// must never be printed or logged.
+	URL        string    `json:"url"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	SourceID   string    `json:"source_id"`
+	ReleaseTag string    `json:"release_tag"`
+	SizeBytes  *int64    `json:"size_bytes,omitempty"`
+	SHA256     *string   `json:"sha256,omitempty"`
+}
+
+// DownloadSource asks for a download target for one release of an upload-backed
+// app; sourceID may be LatestSource. The archive itself is fetched from storage
+// with DownloadSourceArchive.
+func (c *Client) DownloadSource(ctx context.Context, orgID, appID, sourceID string) (*SourceDownload, error) {
+	var resp SourceDownload
+	if err := c.get(ctx, sourcesPath(orgID, appID)+"/"+sourceID+"/download", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
