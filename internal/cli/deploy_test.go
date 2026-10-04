@@ -80,7 +80,7 @@ func newDeployFake(t *testing.T) *deployFake {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{"source_id":%q,"upload":{"url":%q,"fields":{"key":"uploads/o/a/s.zip","policy":"p","x-amz-signature":"sig"}},"expires_at":"2026-10-01T10:15:00Z","max_bytes":%d,"key":"uploads/o/a/s.zip"}`,
+		_, _ = fmt.Fprintf(w, `{"source_id":%q,"upload":{"url":%q,"fields":{"key":"uploads/o/a/s.zip","policy":"p","x-amz-signature":"sig"}},"expires_at":"2026-10-01T10:15:00Z","max_bytes":%d,"key":"uploads/o/a/s.zip"}`,
 			deploySrcID, s3.URL, f.maxBytes)
 	})
 	mux.HandleFunc("POST "+deployAppPath+"/sources/"+deploySrcID+"/complete", func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +111,7 @@ func newDeployFake(t *testing.T) *deployFake {
 		status := f.deployState[min(f.deployReads, len(f.deployState)-1)]
 		f.deployReads++
 		f.mu.Unlock()
-		fmt.Fprintf(w, `{"id":"deploy-1","app_id":"app-1","environment_id":"env-1","release_tag":"src-3","status":%q}`, status)
+		_, _ = fmt.Fprintf(w, `{"id":"deploy-1","app_id":"app-1","environment_id":"env-1","release_tag":"src-3","status":%q}`, status)
 	})
 	f.api = newTestServer(t, mux)
 	return f
