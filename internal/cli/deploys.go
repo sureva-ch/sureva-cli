@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,6 +27,7 @@ func NewDeploysCmd() *cobra.Command {
 AGENT USAGE
   Trigger and poll:
     sureva deploys trigger <app-id> --org <slug> --tag v1.2.3
+    sureva deploys trigger <app-id> --org <slug> --source-id <source-id>
     sureva deploys status <app-id> <deploy-id> --org <slug>
     sureva deploys cancel <app-id> <deploy-id> --org <slug>
 
@@ -38,7 +41,7 @@ AGENT USAGE
 	return deploys
 }
 
-// newDeploysTriggerCmd returns `deploys trigger <app-id> [--tag <tag>] [--env-id <id>] [--wait]`.
+// newDeploysTriggerCmd returns `deploys trigger <app-id> [--tag <tag> | --source-id <id>] [--env-id <id>] [--wait]`.
 func newDeploysTriggerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "trigger <app-id>",
@@ -48,13 +51,26 @@ func newDeploysTriggerCmd() *cobra.Command {
 VALIDATION / INPUTS
   <app-id>: application ID returned by apps list/create.
   --org: required organization slug unless a default org is configured.
-  --tag: release tag to deploy (example: v1.2.3); required by the API for API
-         and SSE app types.
+  --tag: release tag of a GitHub-backed app (example: v1.2.3); required by the
+         API for API and SSE app types. Rejected for an upload-backed app.
+  --source-id: release ID of an upload-backed app, from 'sources list'. Deploys
+         that release, which is also how you roll back. With neither --tag nor
+         --source-id an upload-backed app deploys its latest ready release.
+         Mutually exclusive with --tag.
   --env-id: environment UUID; defaults to the production environment when empty.
-  --wait-interval/--wait-timeout: Go duration strings (examples: 1s, 30s, 15m).`,
+  --wait-interval/--wait-timeout: Go duration strings (examples: 1s, 30s, 15m).
+
+ERRORS (stderr envelope "code"; all exit 1 unless noted)
+  source_expired    410: the release is no longer stored; upload the source again.
+  source_not_ready  409: the release is pending, validating, rejected or expired.
+  not_found         404 (exit 3): unknown release, or no ready release to deploy.
+  validation_error  400 (exit 4): --tag on an upload-backed app, or --source-id
+                    on a GitHub-backed one.
+  deploy_failed     with --wait: the deployment itself failed or was cancelled.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tag, _ := cmd.Flags().GetString("tag")
+			sourceID, _ := cmd.Flags().GetString("source-id")
 			envID, _ := cmd.Flags().GetString("env-id")
 			wait, _ := cmd.Flags().GetBool("wait")
 			waitInterval, _ := cmd.Flags().GetDuration("wait-interval")
@@ -65,14 +81,23 @@ VALIDATION / INPUTS
 				return err
 			}
 
+			if tag != "" && sourceID != "" {
+				r.RenderError(
+					"--tag and --source-id are mutually exclusive: --tag selects a release of a GitHub-backed app, --source-id a release of an upload-backed app",
+					"validation_error",
+					-1,
+				)
+				return &ExitError{Code: output.ExitValidation}
+			}
+
 			orgID, err := requireOrgID(cmd.Context(), cmd, c, r)
 			if err != nil {
 				return err
 			}
 
-			deploy, err := c.TriggerDeployment(cmd.Context(), orgID, args[0], tag, envID)
+			deploy, err := c.TriggerDeployment(cmd.Context(), orgID, args[0], tag, sourceID, envID)
 			if err != nil {
-				return handleAPIError(r, err)
+				return handleAPIError(r, classifySourceError(err))
 			}
 
 			if wait {
@@ -119,7 +144,8 @@ VALIDATION / INPUTS
 			return nil
 		},
 	}
-	cmd.Flags().String("tag", "", "Release tag to deploy (e.g. v1.2.3); required for API and SSE app types")
+	cmd.Flags().String("tag", "", "Release tag of a GitHub-backed app (e.g. v1.2.3); required for API and SSE app types; not accepted for an upload-backed app")
+	cmd.Flags().String("source-id", "", "Release ID of an upload-backed app (see 'sources list'); deploys that release, also used to roll back; mutually exclusive with --tag")
 	cmd.Flags().String("env-id", "", "Environment UUID; defaults to the production environment when empty")
 	cmd.Flags().Bool("wait", false, "Wait for deployment to reach a terminal state before returning")
 	cmd.Flags().Duration("wait-interval", 5*time.Second, "Polling interval as a Go duration when --wait is active (e.g. 5s)")
@@ -231,4 +257,24 @@ VALIDATION / INPUTS
 			return nil
 		},
 	}
+}
+
+// classifySourceError gives the two source-release failures of a deploy their
+// own envelope code. Both exit 1, and a 409 is not unique to them (a deployment
+// already in progress is one too), so the status alone does not tell a caller
+// what to do. A 410 can only mean the stored version is gone. A 409 is
+// recognised by the cloud-api message prefix "this source archive is <status>";
+// any other 409 keeps its status-derived code.
+func classifySourceError(err error) error {
+	var apiErr *client.APIError
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	switch {
+	case apiErr.HTTPStatus == http.StatusGone:
+		apiErr.Code = "source_expired"
+	case apiErr.HTTPStatus == http.StatusConflict && strings.HasPrefix(apiErr.Message, "this source archive is "):
+		apiErr.Code = "source_not_ready"
+	}
+	return apiErr
 }

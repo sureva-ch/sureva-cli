@@ -49,6 +49,12 @@ EXIT CODES
   4  validation / bad input (400 / 422)
   5  network error (no HTTP response)
 
+  Exit 1 covers several API failures that need different handling; tell them
+  apart by the "code" (and "http_status") in the stderr envelope. For
+  deploys trigger: source_expired (410, release no longer stored),
+  source_not_ready (409, release not ready or rejected), deploy_failed (the
+  deployment itself failed under --wait).
+
 AUTHENTICATION
   Run sureva login for interactive browser authentication.
   Set SUREVA_TOKEN to a personal access token (sapi_...) for CI and agents.

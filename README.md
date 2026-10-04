@@ -314,9 +314,27 @@ sureva deploys trigger <app-id> --org <slug> --tag v1.2.3 --env-id <uuid>
 # Trigger and wait for terminal state (success|failed|cancelled)
 sureva deploys trigger <app-id> --org <slug> --tag v1.2.3 --wait
 
+# Upload-backed app: deploy a release by id (also how you roll back).
+# With neither --tag nor --source-id the latest ready release is deployed.
+sureva deploys trigger <app-id> --org <slug> --source-id <source-id>
+
 sureva deploys list <app-id> --org <slug>
 sureva deploys status <app-id> <deploy-id> --org <slug>
 ```
+
+`--tag` selects a release of a GitHub-backed app and is rejected for an
+upload-backed one; `--source-id` is the reverse. They are mutually exclusive
+(usage error, exit 4, no request sent). The API's answer is passed through, and
+exit 1 alone does not say which failure it was, so read `code` in the stderr
+envelope:
+
+| `code` | HTTP | Meaning |
+|--------|------|---------|
+| `source_expired` | 410 | The release is no longer stored; upload the source again |
+| `source_not_ready` | 409 | The release is pending, validating, rejected or expired |
+| `not_found` | 404 | Unknown release, or no ready release to deploy (exit 3) |
+| `validation_error` | 400 | `--tag` on an upload-backed app or `--source-id` on a GitHub-backed one (exit 4) |
+| `deploy_failed` | n/a | With `--wait`: the deployment itself failed or was cancelled |
 
 **`--wait` flags** (available on `apps create` and `deploys trigger`):
 
