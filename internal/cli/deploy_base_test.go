@@ -19,7 +19,10 @@ const (
 	apiInvalidBase  = `{"code":"invalid_base_source_id","error":"reworded: not a source id"}`
 	apiBaseNotFound = `{"code":"base_source_not_found","error":"reworded: unknown base"}`
 	staleBaseWhy    = "the release this upload was built from is no longer the latest: src-5 is."
-	latestListJSON  = `[{"id":"src-5-id","app_id":"app-1","seq":5,"status":"ready","release_tag":"src-5","created_at":"2026-10-04T10:00:00Z","updated_at":"2026-10-04T10:00:00Z"},{"id":"src-2-id","app_id":"app-1","seq":2,"status":"ready","release_tag":"src-2","created_at":"2026-10-03T10:00:00Z","updated_at":"2026-10-03T10:00:00Z"}]`
+	// baseSrcID is the release a directory was pulled from: ids are UUIDs, and a
+	// record whose id is not one is not sent as a base.
+	baseSrcID      = "3c1b0d5e-4f6a-4a2b-9c3d-1e2f3a4b5c6d"
+	latestListJSON = `[{"id":"src-5-id","app_id":"app-1","seq":5,"status":"ready","release_tag":"src-5","created_at":"2026-10-04T10:00:00Z","updated_at":"2026-10-04T10:00:00Z"},{"id":"` + baseSrcID + `","app_id":"app-1","seq":2,"status":"ready","release_tag":"src-2","created_at":"2026-10-03T10:00:00Z","updated_at":"2026-10-03T10:00:00Z"}]`
 )
 
 func writeRecord(t *testing.T, dir string, b sourcebase.Base) {
@@ -30,7 +33,7 @@ func writeRecord(t *testing.T, dir string, b sourcebase.Base) {
 }
 
 func pulledAs(appID string) sourcebase.Base {
-	return sourcebase.Base{AppID: appID, SourceID: "src-2-id", ReleaseTag: "src-2", SHA256: "old-sha"}
+	return sourcebase.Base{AppID: appID, SourceID: baseSrcID, ReleaseTag: "src-2", SHA256: "old-sha"}
 }
 
 // sentBase decodes the base_source_id of the create-upload request; ok is false
@@ -58,11 +61,11 @@ func TestDeploy_SendsThePulledReleaseAsBase(t *testing.T) {
 		t.Fatalf("exit %d: %s", exitCode(err), errBuf)
 	}
 
-	if id, _ := sentBase(t, f); id != "src-2-id" {
-		t.Errorf("base_source_id sent = %q, want src-2-id (body %q)", id, f.createReqBody)
+	if id, _ := sentBase(t, f); id != baseSrcID {
+		t.Errorf("base_source_id sent = %q, want %s (body %q)", id, baseSrcID, f.createReqBody)
 	}
 	res := decodeJSON(t, outBuf)
-	if res["base_source_id"] != "src-2-id" || res["base_sent"] != true {
+	if res["base_source_id"] != baseSrcID || res["base_sent"] != true {
 		t.Errorf("base_source_id/base_sent = %v/%v", res["base_source_id"], res["base_sent"])
 	}
 }
@@ -115,7 +118,7 @@ func TestDeploy_NoBaseOverwritesOnPurpose(t *testing.T) {
 		t.Errorf("--no-base must send no base, got body %q", f.createReqBody)
 	}
 	res := decodeJSON(t, outBuf)
-	if res["base_sent"] != false || res["base_source_id"] != "src-2-id" {
+	if res["base_sent"] != false || res["base_source_id"] != baseSrcID {
 		t.Errorf("base_sent/base_source_id = %v/%v", res["base_sent"], res["base_source_id"])
 	}
 	// The directory is the latest release afterwards, so the record moves anyway.
@@ -162,7 +165,7 @@ func TestDeploy_StaleBaseHasItsOwnCodeAndNamesTheLatestRelease(t *testing.T) {
 	if src, _ := decodeJSON(t, outBuf)["source"].(map[string]any); src["validation_code"] != "stale_base" {
 		t.Errorf("source = %v", src)
 	}
-	if b := sourcebase.Read(dir); b == nil || b.SourceID != "src-2-id" {
+	if b := sourcebase.Read(dir); b == nil || b.SourceID != baseSrcID {
 		t.Errorf("a refused upload must not move the record, got %+v", b)
 	}
 }
@@ -210,7 +213,7 @@ func TestDeploy_UnusableBaseAtRequestTime(t *testing.T) {
 			if env["code"] != tc.code {
 				t.Errorf("code = %v, want %s", env["code"], tc.code)
 			}
-			for _, want := range []string{"src-2-id", "sources pull", "--no-base", "Nothing was uploaded"} {
+			for _, want := range []string{baseSrcID, "sources pull", "--no-base", "Nothing was uploaded"} {
 				if !strings.Contains(msg, want) {
 					t.Errorf("message lacks %q: %s", want, msg)
 				}
@@ -218,7 +221,7 @@ func TestDeploy_UnusableBaseAtRequestTime(t *testing.T) {
 			if f.s3Hits != 0 {
 				t.Error("nothing may be uploaded")
 			}
-			if b := sourcebase.Read(dir); b == nil || b.SourceID != "src-2-id" {
+			if b := sourcebase.Read(dir); b == nil || b.SourceID != baseSrcID {
 				t.Errorf("the record must be left alone, got %+v", b)
 			}
 		})
@@ -290,7 +293,7 @@ func TestDeploy_RecordStaysWhenTheArchiveIsRejectedOrValidationTimesOut(t *testi
 
 			_ = exec("deploy", dir, "--app", testAppID, "--org", testOrgSlug, "--wait-interval", "1ms", "--wait-timeout", "30ms")
 
-			if b := sourcebase.Read(dir); b == nil || b.SourceID != "src-2-id" {
+			if b := sourcebase.Read(dir); b == nil || b.SourceID != baseSrcID {
 				t.Errorf("record = %+v, want the one it had", b)
 			}
 		})
@@ -317,17 +320,167 @@ func TestDeploy_FirstDeployCreatesTheRecord(t *testing.T) {
 }
 
 // A record of another app is replaced: the directory now holds this app's
-// latest release.
-func TestDeploy_RecordOfAnotherAppIsReplaced(t *testing.T) {
+// latest release. The replacement is reported, so the pulled release of the
+// other app is not lost without a word.
+func TestDeploy_RecordOfAnotherAppIsReplacedAndReported(t *testing.T) {
 	f := newDeployFake(t)
 	dir := deployProject(t)
 	writeRecord(t, dir, pulledAs("other-app"))
-	_, _, exec := newTestRoot(t, f.api)
+	outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+	if err := exec(deployArgs(dir)...); exitCode(err) != 0 {
+		t.Fatalf("exit %d: %s", exitCode(err), errBuf)
+	}
+
+	if f.createReqBody != "" {
+		t.Errorf("a record of another app is not a base, got body %q", f.createReqBody)
+	}
+	if b := sourcebase.Read(dir); b == nil || b.AppID != testAppID || b.SourceID != deploySrcID {
+		t.Errorf("record = %+v", b)
+	}
+	res := decodeJSON(t, outBuf)
+	replaced, _ := res["state_file_replaced"].(map[string]any)
+	if replaced["app_id"] != "other-app" || replaced["source_id"] != baseSrcID || replaced["release_tag"] != "src-2" {
+		t.Errorf("state_file_replaced = %v", res["state_file_replaced"])
+	}
+	if res["base_sent"] != false || res["state_file"] == nil {
+		t.Errorf("output = %v", res)
+	}
+}
+
+// Nothing is reported when no record of another app was replaced.
+func TestDeploy_NoReplacementIsReportedForTheSameAppOrNoRecord(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, dir string){
+		"no record": func(*testing.T, string) {},
+		"same app":  func(t *testing.T, dir string) { writeRecord(t, dir, pulledAs(testAppID)) },
+		"invalid source": func(t *testing.T, dir string) {
+			writeRecord(t, dir, sourcebase.Base{AppID: testAppID, SourceID: "src-2-id"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newDeployFake(t)
+			dir := deployProject(t)
+			setup(t, dir)
+			outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+			if err := exec(deployArgs(dir)...); exitCode(err) != 0 {
+				t.Fatalf("exit %d: %s", exitCode(err), errBuf)
+			}
+
+			if res := decodeJSON(t, outBuf); res["state_file_replaced"] != nil {
+				t.Errorf("state_file_replaced = %v", res["state_file_replaced"])
+			}
+		})
+	}
+}
+
+// A record whose source id is not a UUID would only come back as
+// invalid_base_source_id: it is not sent, the deploy goes ahead without a base
+// and the output says why.
+func TestDeploy_RecordWithoutAUUIDIsIgnoredAndReported(t *testing.T) {
+	f := newDeployFake(t)
+	dir := deployProject(t)
+	writeRecord(t, dir, sourcebase.Base{AppID: testAppID, SourceID: "src-2-id", ReleaseTag: "src-2"})
+	outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+	if err := exec(deployArgs(dir)...); exitCode(err) != 0 {
+		t.Fatalf("exit %d: %s", exitCode(err), errBuf)
+	}
+
+	if f.createReqBody != "" {
+		t.Errorf("an unusable record must not be sent, got body %q", f.createReqBody)
+	}
+	res := decodeJSON(t, outBuf)
+	why, _ := res["base_record_ignored"].(string)
+	if res["base_sent"] != false || res["base_source_id"] != nil || !strings.Contains(why, "not a UUID") {
+		t.Errorf("output = %v", res)
+	}
+	if errBuf.Len() != 0 {
+		t.Errorf("nothing is written to stderr, got %s", errBuf)
+	}
+	if b := sourcebase.Read(dir); b == nil || b.SourceID != deploySrcID {
+		t.Errorf("the record moves to the published release, got %+v", b)
+	}
+}
+
+// A usable record is not reported as ignored.
+func TestDeploy_UsableRecordIsNotReportedAsIgnored(t *testing.T) {
+	f := newDeployFake(t)
+	dir := deployProject(t)
+	writeRecord(t, dir, pulledAs(testAppID))
+	outBuf, _, exec := newTestRoot(t, f.api)
 
 	_ = exec(deployArgs(dir)...)
 
-	if b := sourcebase.Read(dir); b == nil || b.AppID != testAppID {
-		t.Errorf("record = %+v", b)
+	if res := decodeJSON(t, outBuf); res["base_record_ignored"] != nil {
+		t.Errorf("base_record_ignored = %v", res["base_record_ignored"])
+	}
+}
+
+// After a validation timeout the record stays, so the next deploy may be
+// refused as stale_base if the source becomes ready: the message says so and
+// names the way out. A directory without a record has nothing to warn about.
+func TestDeploy_ValidationTimeoutExplainsTheRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		withBase  bool
+		wantNote  bool
+		extraArgs []string
+	}{
+		{"with a record", true, true, nil},
+		{"with a record and --no-base", true, true, []string{"--no-base"}},
+		{"without a record", false, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newDeployFake(t)
+			f.sourceSeq = []string{"validating"}
+			dir := deployProject(t)
+			if tc.withBase {
+				writeRecord(t, dir, pulledAs(testAppID))
+			}
+			_, errBuf, exec := newTestRoot(t, f.api)
+
+			_ = exec(append([]string{"deploy", dir, "--app", testAppID, "--org", testOrgSlug, "--wait-interval", "1ms", "--wait-timeout", "30ms"}, tc.extraArgs...)...)
+
+			env := decodeJSON(t, errBuf)
+			msg, _ := env["error"].(string)
+			if env["code"] != "validation_timeout" {
+				t.Fatalf("envelope = %v", env)
+			}
+			for _, want := range []string{"stale_base", "sources list", "sources pull", "--no-base", "left as it was"} {
+				if got := strings.Contains(msg, want); got != tc.wantNote {
+					t.Errorf("message contains %q = %v, want %v: %s", want, got, tc.wantNote, msg)
+				}
+			}
+			if !strings.Contains(msg, "sources get") {
+				t.Errorf("the original hint is gone: %s", msg)
+			}
+		})
+	}
+}
+
+// The API's latest release is the ready one with the highest seq, which is not
+// the first ready row of a list ordered by creation time.
+func TestDeploy_StaleBaseNamesTheHighestSeqNotTheFirstRow(t *testing.T) {
+	const list = `[` +
+		`{"id":"src-6-id","app_id":"app-1","seq":6,"status":"rejected","release_tag":"src-6","created_at":"2026-10-06T10:00:00Z","updated_at":"2026-10-06T10:00:00Z"},` +
+		`{"id":"src-3-id","app_id":"app-1","seq":3,"status":"ready","release_tag":"src-3","created_at":"2026-10-05T10:00:00Z","updated_at":"2026-10-07T10:00:00Z"},` +
+		`{"id":"src-5-id","app_id":"app-1","seq":5,"status":"ready","release_tag":"src-5","created_at":"2026-10-04T10:00:00Z","updated_at":"2026-10-04T10:00:00Z"},` +
+		`{"id":"src-4-id","app_id":"app-1","seq":4,"status":"ready","release_tag":"src-4","created_at":"2026-10-03T10:00:00Z","updated_at":"2026-10-03T10:00:00Z"}]`
+	f := newDeployFake(t)
+	f.sourceSeq = []string{"rejected"}
+	f.rejectCode, f.rejectRetryable = "stale_base", boolPtr(false)
+	f.listJSON = list
+	dir := deployProject(t)
+	writeRecord(t, dir, pulledAs(testAppID))
+	_, errBuf, exec := newTestRoot(t, f.api)
+
+	_ = exec(deployArgs(dir)...)
+
+	env := decodeJSON(t, errBuf)
+	details, _ := env["details"].(map[string]any)
+	if details["latest_release_tag"] != "src-5" || details["latest_source_id"] != "src-5-id" || !strings.Contains(env["error"].(string), "src-5 exists") {
+		t.Errorf("envelope = %v", env)
 	}
 }
 
@@ -384,7 +537,7 @@ func TestDeployHelpDocumentsTheBase(t *testing.T) {
 	if err := exec("deploy", "--help"); exitCode(err) != 0 {
 		t.Fatal("help failed")
 	}
-	for _, want := range []string{"--no-base", "stale_base", "base_sent", "invalid_base_source_id", "base_source_not_found", "state_file"} {
+	for _, want := range []string{"--no-base", "stale_base", "base_sent", "invalid_base_source_id", "base_source_not_found", "state_file", "state_file_replaced", "base_record_ignored", "validation timeout"} {
 		if !strings.Contains(outBuf.String(), want) {
 			t.Errorf("deploy --help is missing %q", want)
 		}

@@ -24,7 +24,7 @@ import (
 
 const (
 	deployAppPath = "/v1/orgs/" + testOrgID + "/apps/" + testAppID
-	deploySrcID   = "src-new"
+	deploySrcID   = "5d0a7c1e-2b3f-4c4d-8e5f-6a7b8c9d0e1f"
 )
 
 type fakeReply struct {
@@ -330,7 +330,7 @@ func TestDeploy_HappyPath(t *testing.T) {
 func TestDeploy_ReportsTheBaseRelease(t *testing.T) {
 	f := newDeployFake(t)
 	dir := deployProject(t)
-	if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: testAppID, SourceID: "src-base", ReleaseTag: "src-2", SHA256: "abc"}); err != nil {
+	if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: testAppID, SourceID: baseSrcID, ReleaseTag: "src-2", SHA256: "abc"}); err != nil {
 		t.Fatal(err)
 	}
 	outBuf, errBuf, exec := newTestRoot(t, f.api)
@@ -342,8 +342,8 @@ func TestDeploy_ReportsTheBaseRelease(t *testing.T) {
 	if errBuf.Len() != 0 {
 		t.Errorf("stderr should stay empty, got: %s", errBuf)
 	}
-	if got := decodeJSON(t, outBuf)["base_source_id"]; got != "src-base" {
-		t.Errorf("base_source_id = %v, want src-base", got)
+	if got := decodeJSON(t, outBuf)["base_source_id"]; got != baseSrcID {
+		t.Errorf("base_source_id = %v, want %s", got, baseSrcID)
 	}
 	if got := strings.Join(f.zipNames(), ","); got != ".surevaignore,index.js,src/app.js" {
 		t.Errorf("archive entries = %s; .sureva/ must never be uploaded", got)
@@ -359,7 +359,7 @@ func TestDeploy_NoBaseWhenNotPulledOrPulledForAnotherApp(t *testing.T) {
 	cases := map[string]func(t *testing.T, dir string){
 		"never pulled": func(*testing.T, string) {},
 		"another app": func(t *testing.T, dir string) {
-			if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: "other-app", SourceID: "src-base"}); err != nil {
+			if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: "other-app", SourceID: baseSrcID}); err != nil {
 				t.Fatal(err)
 			}
 		},

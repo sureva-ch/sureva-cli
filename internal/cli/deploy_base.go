@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sureva-ch/sureva-cli/internal/client"
@@ -36,12 +37,11 @@ func staleBaseFailure(ctx context.Context, c *client.Client, orgID, appID string
 
 	latest := "a newer release"
 	if sources, err := c.ListSources(ctx, orgID, appID); err == nil {
-		for _, s := range sources {
-			if s.Status == "ready" && s.ReleaseTag != nil {
+		if s := latestReady(sources); s != nil {
+			details["latest_source_id"] = s.ID
+			if s.ReleaseTag != nil {
 				latest = *s.ReleaseTag
-				details["latest_source_id"] = s.ID
 				details["latest_release_tag"] = *s.ReleaseTag
-				break
 			}
 		}
 	}
@@ -49,6 +49,59 @@ func staleBaseFailure(ctx context.Context, c *client.Client, orgID, appID string
 		"Pull the latest release into a separate directory ('sureva sources pull %s --dir <new-dir>'), reapply your change there and run deploy again from it; "+
 		"or run deploy again with --no-base to overwrite %s on purpose",
 		was, latest, appID, latest), details
+}
+
+// latestReady is the app's latest release as the API means it: the ready source
+// with the highest seq. The list is ordered by creation time, which is not the
+// same thing (a release created earlier can be promoted later), so its order is
+// not used. nil when no source is ready.
+func latestReady(sources []client.AppSource) *client.AppSource {
+	var latest *client.AppSource
+	for i := range sources {
+		if s := &sources[i]; s.Status == "ready" && (latest == nil || s.Seq > latest.Seq) {
+			latest = s
+		}
+	}
+	return latest
+}
+
+// isUUID reports whether s is a UUID in one of the forms the API accepts for a
+// source id: the canonical 8-4-4-4-12 hexadecimal groups, 32 hexadecimal digits
+// without hyphens, either of them in braces or after "urn:uuid:".
+func isUUID(s string) bool {
+	s = strings.TrimPrefix(s, "urn:uuid:")
+	if len(s) == 38 && s[0] == '{' && s[37] == '}' {
+		s = s[1:37]
+	}
+	hyphens := false
+	switch len(s) {
+	case 36:
+		hyphens = true
+	case 32:
+	default:
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if hyphens && (i == 8 || i == 13 || i == 18 || i == 23) {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !isHexDigit(c) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexDigit(c byte) bool {
+	switch {
+	case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		return true
+	}
+	return false
 }
 
 // recordPublished moves dir's .sureva/source.json to the release that was just
@@ -71,10 +124,14 @@ func recordPublished(dir, appID string, source *client.AppSource, res *deployRes
 	if source.SHA256 != nil {
 		b.SHA256 = *source.SHA256
 	}
+	prev := sourcebase.Read(dir)
 	p, err := sourcebase.Write(dir, b)
 	if err != nil {
 		res.StateFileError = fmt.Sprintf("the release was published but %s could not be updated: %v; the next deploy from this directory will not be based on this release (run 'sureva sources pull' into a fresh directory, or deploy with --no-base)", sourcebase.Path(dir), err)
 		return
 	}
 	res.StateFile = p
+	if prev != nil && prev.AppID != appID {
+		res.StateFileReplaced = &replacedRecord{AppID: prev.AppID, SourceID: prev.SourceID, ReleaseTag: prev.ReleaseTag}
+	}
 }

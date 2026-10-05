@@ -427,9 +427,11 @@ release in `.sureva/source.json`. When that record belongs to `--app`, `deploy`
 sends its source id as `base_source_id` with the upload request, and the
 platform refuses to publish the archive if that release is no longer the app's
 latest ready one: two agents that pulled the same release cannot silently
-overwrite each other. No record, a damaged one or another app's record: nothing
-is sent, as before. `--no-base` sends nothing on purpose (an intentional
-overwrite). `base_sent` in the output says which happened. A base only protects
+overwrite each other. No record, a damaged one, another app's record, or one
+whose `source_id` is not a UUID: nothing is sent, as before (for the last,
+`base_record_ignored` in the output says why). `--no-base` sends nothing on
+purpose (an intentional overwrite). `base_sent` in the output says which
+happened. A base only protects
 against an API that checks it; an older API ignores it.
 
 Once the new release is `ready`, `deploy` rewrites `.sureva/source.json` to it
@@ -438,10 +440,21 @@ Once the new release is `ready`, `deploy` rewrites `.sureva/source.json` to it
 also happens for a directory that was never pulled, and also when the deployment
 then fails or times out: from the moment the release is ready the directory
 **is** that release. A refused archive, an expired source or a validation
-timeout leaves the record as it was. If the record cannot be written (for
+timeout leaves the record as it was; after a validation timeout that matters,
+because if the source becomes ready later the next deploy from this directory is
+rejected as `stale_base` (the message says so: run `sureva sources list`, then
+pull the latest release again or deploy with `--no-base`). If the record cannot be written (for
 example `.sureva` is a symlink) the command still succeeds and the output
 carries `state_file_error` instead of `state_file`; the next deploy from that
 directory is then not based on the new release.
+
+A record of **another app** is replaced as well. Pulled from app A and deployed
+with `--app B` (no base is sent, as the record is not B's), the directory is B's
+latest release once it is ready, so the record becomes B's. The release pulled
+from A is then no longer recorded there, and a later deploy of that directory to
+A has no base to protect it. The output says so with
+`state_file_replaced` (`app_id`, `source_id`, `release_tag` of the record that
+was replaced); the deploy itself is neither refused nor changed.
 
 The loop for an agent:
 

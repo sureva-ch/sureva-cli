@@ -31,11 +31,14 @@ type deployResult struct {
 	// BaseSourceID is the release the directory is based on, read from
 	// .sureva/source.json when it belongs to this app. BaseSent says whether it
 	// was sent to the API as the upload's base (it is not with --no-base).
-	BaseSourceID string             `json:"base_source_id,omitempty"`
-	BaseSent     bool               `json:"base_sent"`
-	Archive      *archiveSummary    `json:"archive,omitempty"`
-	Source       *client.AppSource  `json:"source,omitempty"`
-	Deployment   *client.Deployment `json:"deployment,omitempty"`
+	BaseSourceID string `json:"base_source_id,omitempty"`
+	BaseSent     bool   `json:"base_sent"`
+	// BaseRecordIgnored says why .sureva/source.json, which names this app, was
+	// not used as the base: its source id is not a UUID, so no base was sent.
+	BaseRecordIgnored string             `json:"base_record_ignored,omitempty"`
+	Archive           *archiveSummary    `json:"archive,omitempty"`
+	Source            *client.AppSource  `json:"source,omitempty"`
+	Deployment        *client.Deployment `json:"deployment,omitempty"`
 	// ValidationRetries counts how often 'complete' was repeated because
 	// validation was refused for a reason on the platform's side.
 	ValidationRetries int `json:"validation_retries,omitempty"`
@@ -44,8 +47,20 @@ type deployResult struct {
 	// published, but the next deploy from this directory will not be based on it).
 	StateFile      string `json:"state_file,omitempty"`
 	StateFileError string `json:"state_file_error,omitempty"`
+	// StateFileReplaced is the record of ANOTHER app that StateFile replaced.
+	// The directory is this app's latest release now; the release it was pulled
+	// from is no longer recorded here.
+	StateFileReplaced *replacedRecord `json:"state_file_replaced,omitempty"`
 	// Logs says how to fetch the logs of a deployment that failed.
 	Logs *logsHint `json:"logs,omitempty"`
+}
+
+// replacedRecord is the .sureva/source.json of another app that a deploy
+// replaced.
+type replacedRecord struct {
+	AppID      string `json:"app_id"`
+	SourceID   string `json:"source_id"`
+	ReleaseTag string `json:"release_tag,omitempty"`
 }
 
 type archiveSummary struct {
@@ -101,15 +116,23 @@ BASE RELEASE
   source id as base_source_id with the upload request, and the platform refuses
   to publish the archive if that release is no longer the app's latest ready one
   (so two agents that pulled the same release cannot overwrite each other). No
-  record, a damaged one or another app's: nothing is sent. --no-base sends
-  nothing either, on purpose.
+  record, a damaged one, another app's or one whose source_id is not a UUID:
+  nothing is sent (output base_record_ignored says why for the last). --no-base
+  sends nothing either, on purpose.
   Once the new release is ready, deploy rewrites .sureva/source.json to it (its
   source id, release tag, the sha256 of the stored archive and the time), also in
   a directory that was never pulled and also when the deployment then fails or
   times out, because the directory is that release from then on. A record that
   cannot be written does not fail the command: state_file_error says so and the
   next deploy from this directory is not based on this release. A rejection,
-  an expired source or a validation timeout leaves the record as it was.
+  an expired source or a validation timeout leaves the record as it was; after
+  a validation timeout that matters: if the source becomes ready later, the
+  next deploy from this directory is rejected as stale_base (the way out is
+  'sources list', then pull again or --no-base; the timeout message says so).
+  A record of ANOTHER app is replaced too: pulled from app A and deployed with
+  --app B, the directory is B's latest release afterwards, and the output
+  carries state_file_replaced{app_id,source_id,release_tag} with the record that
+  was replaced, so the pulled release of A is no longer recorded here.
   Loop for an agent: sources pull -> edit -> deploy; on stale_base pull the latest
   into a separate directory, reapply the change, deploy from there.
 
@@ -151,7 +174,9 @@ OUTPUT (stdout JSON)
   present only when .sureva/source.json names this app: it is the release the tree
   was based on; base_sent says whether it went to the API (false with --no-base).
   state_file is that record after it moved to the release just published, or
-  state_file_error when it could not be written. On a failure after
+  state_file_error when it could not be written; state_file_replaced is the
+  record of another app that it replaced, and base_record_ignored says why a
+  record naming this app was not used as the base. On a failure after
   the upload the same JSON is printed with what completed so far.
 
 ERRORS (stderr envelope "code"; exit code in parentheses)
@@ -298,7 +323,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// The release the directory is based on is sent with the upload request so
 	// the platform can refuse the upload when that release is no longer the
 	// latest. --no-base sends nothing: an explicit overwrite.
-	base := pulledBase(dir, appID)
+	base, baseIgnored := pulledBase(dir, appID)
 	baseID := ""
 	if base != nil {
 		baseID = base.SourceID
@@ -307,7 +332,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if noBase {
 		sendBase = ""
 	}
-	res = &deployResult{AppID: appID, BaseSourceID: baseID, BaseSent: sendBase != "", Archive: &archiveSummary{
+	res = &deployResult{AppID: appID, BaseSourceID: baseID, BaseSent: sendBase != "", BaseRecordIgnored: baseIgnored, Archive: &archiveSummary{
 		SizeBytes: archive.Size,
 		Files:     archive.Files,
 		Packing:   archive.Mode,
@@ -379,7 +404,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			gaveUp  *validationUnavailableError
 			tooLate *retryTooLateError
 		)
-		checkHint := fmt.Sprintf("check with 'sources get %s %s --org <slug>', then deploy it with 'deploys trigger %s --source-id %s'", appID, upload.SourceID, appID, upload.SourceID)
+		checkHint := fmt.Sprintf("check with 'sources get %s %s --org <slug>', then deploy it with 'deploys trigger %s --source-id %s'", appID, upload.SourceID, appID, upload.SourceID) + timeoutRecordNote(base, appID)
 		switch {
 		case errors.Is(pollErr, errWaitTimeout):
 			return failWith(fmt.Sprintf("timed out waiting for validation of source %s; %s", upload.SourceID, checkHint), "validation_timeout", output.ExitGeneral)
@@ -471,11 +496,30 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 // pulledBase returns the record of the release dir is based on for this app, or
 // nil when dir has none, the record is unreadable, or it belongs to another app.
-func pulledBase(dir, appID string) *sourcebase.Base {
-	if b := sourcebase.Read(dir); b != nil && b.AppID == appID {
-		return b
+// A record of this app whose source id is not a UUID cannot be a base either:
+// it is not sent, and ignored says why.
+func pulledBase(dir, appID string) (base *sourcebase.Base, ignored string) {
+	b := sourcebase.Read(dir)
+	if b == nil || b.AppID != appID {
+		return nil, ""
 	}
-	return nil
+	if !isUUID(b.SourceID) {
+		return nil, "the source_id in " + sourcebase.Dir + "/" + sourcebase.File + " is not a UUID, so it was not sent as the base; deploying without a base"
+	}
+	return b, ""
+}
+
+// timeoutRecordNote is what a validation timeout adds when the directory has a
+// base record: the record is left as it was, so if the source becomes ready
+// after all, the next deploy from this directory is based on a release that is
+// no longer the latest and is refused as stale_base.
+func timeoutRecordNote(base *sourcebase.Base, appID string) string {
+	if base == nil {
+		return ""
+	}
+	return fmt.Sprintf(". %s/%s was left as it was: if this source becomes ready later, the next deploy from this directory is rejected as stale_base. "+
+		"Check with 'sureva sources list %s --org <slug>', then pull the latest release again ('sureva sources pull %s --dir <new-dir>') or run deploy with --no-base",
+		sourcebase.Dir, sourcebase.File, appID, appID)
 }
 
 // rejectionReason is why validation refused a source, in the API's words.
