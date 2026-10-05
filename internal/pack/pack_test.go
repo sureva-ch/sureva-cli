@@ -277,6 +277,10 @@ func TestPack_AlwaysExcludedNames(t *testing.T) {
 		{"sureva state", ".sureva/source.json"},
 		{"sureva state upper", ".SUREVA/source.json"},
 		{"sureva state nested", "pkg/.Sureva/source.json"},
+		// The staging directory a killed pull can leave behind.
+		{"pull staging", ".sureva-pull-123456/a.js"},
+		{"pull staging upper", ".SUREVA-PULL-1/a.js"},
+		{"pull staging nested", "pkg/.sureva-pull-9/a.js"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
