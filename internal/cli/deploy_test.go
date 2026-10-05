@@ -24,7 +24,7 @@ import (
 
 const (
 	deployAppPath = "/v1/orgs/" + testOrgID + "/apps/" + testAppID
-	deploySrcID   = "src-new"
+	deploySrcID   = "5d0a7c1e-2b3f-4c4d-8e5f-6a7b8c9d0e1f"
 )
 
 type fakeReply struct {
@@ -61,6 +61,10 @@ type deployFake struct {
 	deployState        []string // statuses GET deployment answers with, last one repeats
 	createCode         int      // overrides POST /sources when set
 	createBody         string
+	// createReqBody is the body of the last POST /sources ("" when it had none).
+	createReqBody string
+	// listJSON is what GET /sources answers with.
+	listJSON string
 	// deployCode/deployErrBody override POST /deployments when set.
 	deployCode    int
 	deployErrBody string
@@ -96,7 +100,18 @@ func newDeployFake(t *testing.T) *deployFake {
 	mux.HandleFunc("GET "+deployAppPath, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(f.appJSON))
 	})
+	mux.HandleFunc("GET "+deployAppPath+"/sources", func(w http.ResponseWriter, r *http.Request) {
+		body := f.listJSON
+		if body == "" {
+			body = "[]"
+		}
+		_, _ = w.Write([]byte(body))
+	})
 	mux.HandleFunc("POST "+deployAppPath+"/sources", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.createReqBody = string(raw)
+		f.mu.Unlock()
 		if f.createCode != 0 {
 			w.WriteHeader(f.createCode)
 			_, _ = w.Write([]byte(f.createBody))
@@ -132,7 +147,7 @@ func newDeployFake(t *testing.T) *deployFake {
 		status := f.sourceSeq[min(f.sourceReads, len(f.sourceSeq)-1)]
 		f.sourceReads++
 		f.mu.Unlock()
-		body := map[string]any{"id": deploySrcID, "app_id": testAppID, "seq": 3, "status": status, "release_tag": "src-3"}
+		body := map[string]any{"id": deploySrcID, "app_id": testAppID, "seq": 3, "status": status, "release_tag": "src-3", "sha256": "stored-sha"}
 		if status == "rejected" {
 			body["validation_error"] = f.rejectWhy
 			if f.rejectCode != "" {
@@ -312,10 +327,10 @@ func TestDeploy_HappyPath(t *testing.T) {
 
 // A directory filled by `sources pull` reports the release it was based on, and
 // never uploads or sends it: the API does not accept a base yet.
-func TestDeploy_ReportsTheBaseReleaseWithoutSendingIt(t *testing.T) {
+func TestDeploy_ReportsTheBaseRelease(t *testing.T) {
 	f := newDeployFake(t)
 	dir := deployProject(t)
-	if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: testAppID, SourceID: "src-base", ReleaseTag: "src-2", SHA256: "abc"}); err != nil {
+	if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: testAppID, SourceID: baseSrcID, ReleaseTag: "src-2", SHA256: "abc"}); err != nil {
 		t.Fatal(err)
 	}
 	outBuf, errBuf, exec := newTestRoot(t, f.api)
@@ -327,8 +342,8 @@ func TestDeploy_ReportsTheBaseReleaseWithoutSendingIt(t *testing.T) {
 	if errBuf.Len() != 0 {
 		t.Errorf("stderr should stay empty, got: %s", errBuf)
 	}
-	if got := decodeJSON(t, outBuf)["base_source_id"]; got != "src-base" {
-		t.Errorf("base_source_id = %v, want src-base", got)
+	if got := decodeJSON(t, outBuf)["base_source_id"]; got != baseSrcID {
+		t.Errorf("base_source_id = %v, want %s", got, baseSrcID)
 	}
 	if got := strings.Join(f.zipNames(), ","); got != ".surevaignore,index.js,src/app.js" {
 		t.Errorf("archive entries = %s; .sureva/ must never be uploaded", got)
@@ -344,7 +359,7 @@ func TestDeploy_NoBaseWhenNotPulledOrPulledForAnotherApp(t *testing.T) {
 	cases := map[string]func(t *testing.T, dir string){
 		"never pulled": func(*testing.T, string) {},
 		"another app": func(t *testing.T, dir string) {
-			if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: "other-app", SourceID: "src-base"}); err != nil {
+			if _, err := sourcebase.Write(dir, sourcebase.Base{AppID: "other-app", SourceID: baseSrcID}); err != nil {
 				t.Fatal(err)
 			}
 		},

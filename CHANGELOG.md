@@ -43,6 +43,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `sources get|list` and the `source` object of `deploy` show `attempts` and
   `max_attempts` when the API sends them.
 
+- `sureva deploy` sends the release recorded in `.sureva/source.json` as
+  `base_source_id` with the upload request when the record belongs to `--app`,
+  so the platform refuses an upload built on a release that is no longer the
+  latest. No record, a damaged one or another app's: nothing is sent.
+  `--no-base` sends nothing on purpose. The output reports `base_sent`.
+- New envelope codes `stale_base` (a newer release exists; not a broken archive;
+  `details.latest_release_tag` names it: the ready release with the highest `seq`), `invalid_base_source_id` and
+  `base_source_not_found` (the recorded base is unusable; the record is left in
+  place).
+- After the release is `ready`, `deploy` updates `.sureva/source.json` to it
+  (also in a directory that was never pulled, and also when the deployment then
+  fails), through the same atomic, symlink-safe write as `sources pull`; the
+  output carries `state_file`, or `state_file_error` when it could not be
+  written, which does not fail the command.
+- When the record replaced belongs to another app (a directory pulled from app A
+  and deployed with `--app B`), the output carries
+  `state_file_replaced{app_id,source_id,release_tag}`; the deploy is not refused.
+  A record of this app whose `source_id` is not a UUID is not sent as the base
+  (it would come back as `invalid_base_source_id`): the deploy goes ahead without
+  a base and the output says why in `base_record_ignored`. The message of a
+  `validation_timeout` says that the record was left as it was, that the next
+  deploy may then be rejected as `stale_base`, and the way out.
+
 ### Changed
 
 Changes to behavior of v0.2.0 that a script may depend on:

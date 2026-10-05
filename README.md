@@ -379,8 +379,8 @@ The record is written atomically and never through a symlink: if `.sureva` is
 not a plain directory, or `source.json` is not a regular file, the pull is
 refused before anything is downloaded. In an empty `--dir` only `source.json`
 is replaced; the rest of an existing `.sureva/` stays. `deploy` never uploads
-`.sureva/`, and reports the recorded release as
-`base_source_id` in its JSON output. It is not sent to the API.
+`.sureva/`. `deploy` sends the recorded release to the API as the base of its
+upload (see [Deploy a local directory](#deploy-a-local-directory)).
 
 stdout is one JSON object: `app_id`, `source_id`, `release_tag`, `dir`, `files`,
 `bytes` (uncompressed), `archive_bytes`, `sha256` and `state_file`. The download
@@ -422,6 +422,59 @@ and the timeout bounds the validation wait and the deployment wait separately.
 A GitHub-backed app is refused up front (`github_backed_app`): use
 `deploys trigger` for it.
 
+**Building on a release.** A directory filled by `sources pull` records its
+release in `.sureva/source.json`. When that record belongs to `--app`, `deploy`
+sends its source id as `base_source_id` with the upload request, and the
+platform refuses to publish the archive if that release is no longer the app's
+latest ready one: two agents that pulled the same release cannot silently
+overwrite each other. No record, a damaged one, another app's record, or one
+whose `source_id` is not a UUID: nothing is sent, as before (for the last,
+`base_record_ignored` in the output says why). `--no-base` sends nothing on
+purpose (an intentional overwrite). `base_sent` in the output says which
+happened. A base only protects
+against an API that checks it; an older API ignores it.
+
+Once the new release is `ready`, `deploy` rewrites `.sureva/source.json` to it
+(`source_id`, `release_tag`, the `sha256` of the stored archive, and the time in
+`pulled_at`), so the next deploy from the same directory is based on it. This
+also happens for a directory that was never pulled, and also when the deployment
+then fails or times out: from the moment the release is ready the directory
+**is** that release. A refused archive, an expired source or a validation
+timeout leaves the record as it was; after a validation timeout that matters,
+because if the source becomes ready later the next deploy from this directory is
+rejected as `stale_base` (the message says so: run `sureva sources list`, then
+pull the latest release again or deploy with `--no-base`). If the record cannot be written (for
+example `.sureva` is a symlink) the command still succeeds and the output
+carries `state_file_error` instead of `state_file`; the next deploy from that
+directory is then not based on the new release.
+
+A record of **another app** is replaced as well. Pulled from app A and deployed
+with `--app B` (no base is sent, as the record is not B's), the directory is B's
+latest release once it is ready, so the record becomes B's. The release pulled
+from A is then no longer recorded there, and a later deploy of that directory to
+A has no base to protect it. The output says so with
+`state_file_replaced` (`app_id`, `source_id`, `release_tag` of the record that
+was replaced); the deploy itself is neither refused nor changed.
+
+The loop for an agent:
+
+```bash
+sureva sources pull <app-id> --org <slug> --dir ./app   # records the release
+cd ./app && <edit files>
+sureva deploy --app <app-id> --org <slug> --wait         # sends it as the base
+```
+
+When someone else published a release in between (another agent, or the
+platform itself), the deploy fails with **`stale_base`**: the archive was fine
+but is not published. The message names the release that is latest
+(`details.latest_release_tag`). Pull that release into a **separate** directory
+(`sureva sources pull <app-id> --dir ./app-latest`), reapply your change there,
+and deploy again from it; or run `deploy --no-base` to overwrite the latest
+release on purpose. If the recorded base is itself unusable the request is
+refused before anything is uploaded (`invalid_base_source_id`,
+`base_source_not_found`); the record is left in place, so pull again into a new
+directory or pass `--no-base`.
+
 **Validation that could not run is retried.** When the API reports a rejection
 as `retryable` (storage, dispatch or a worker that did not finish: the archive
 was never judged), `deploy` repeats the `complete` call, pausing 2x, 4x and 8x
@@ -454,8 +507,8 @@ the archive size; the zip is built in a temporary file and removed afterwards.
 An archive over the limit the API reports for the app is refused before the
 upload, naming its largest entries.
 
-stdout is one JSON object: `app_id`, `base_source_id` (only for a directory
-filled by `sources pull`), `archive`, `source` (the release, as in
+stdout is one JSON object: `app_id`, `base_source_id` (only when
+`.sureva/source.json` names this app), `base_sent`, `archive`, `source` (the release, as in
 `sources get`) and `deployment`. After a failure that follows the upload, the
 same object is printed with what completed, next to the error envelope on
 stderr; after a failed deployment it also carries `logs.command`, the `sureva
@@ -470,6 +523,8 @@ the envelope `code`:
 | `empty_archive` | 4 | nothing left to pack after the exclusions |
 | `github_backed_app` | 4 | the app deploys from GitHub |
 | `app_source_upload_limit_exceeded` | 4 | the app reached its daily upload limit; try again tomorrow (UTC) |
+| `stale_base` | 1 | a newer release exists, so nothing was published (not a broken archive): pull it into a separate directory, reapply the change and deploy again, or use `--no-base`; `details.latest_release_tag` names it |
+| `invalid_base_source_id` / `base_source_not_found` | 4 | the base recorded in `.sureva/source.json` is unusable; nothing was uploaded; pull again into a new directory or use `--no-base` |
 | `validation_unavailable` | 1 | validation could not run (a platform-side cause; `details.validation_code` names it) and the retries did not help or the API has no attempts left (`details.retryable`, `details.attempts`, `details.max_attempts`); run the command again, which starts a fresh set of attempts |
 | `source_not_completable` | 1 | the upload cannot be completed again (`details.source_status` says why) |
 | `source_expired` / `source_not_ready` | 1 | the release is no longer stored / not deployable (`details.source_status`, `details.validation_code`) |

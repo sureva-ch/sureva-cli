@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -338,4 +339,28 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestCreateSourceUpload_SendsTheBaseOnlyWhenGiven(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, base, wantBody string
+	}{
+		{"no base sends no body", "", ""},
+		{"base", "3c1b", `{"base_source_id":"3c1b"}`},
+	} {
+		var gotBody string
+		c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			gotBody = string(raw)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"source_id":"s1","upload":{"url":"u","fields":{}},"max_bytes":1,"key":"k"}`))
+		})
+		if _, err := c.CreateSourceUpload(context.Background(), "org-1", "app-1", tc.base); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if gotBody != tc.wantBody {
+			t.Errorf("%s: body = %q, want %q", tc.name, gotBody, tc.wantBody)
+		}
+	}
 }

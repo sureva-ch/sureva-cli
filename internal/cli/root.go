@@ -58,8 +58,11 @@ EXIT CODES
   no_ready_source (404, exit 3, nothing to deploy yet), deploy_failed (the
   deployment itself failed under --wait). For deploy: archive_too_large,
   source_rejected, empty_archive, github_backed_app and
-  app_source_upload_limit_exceeded exit 4; validation_unavailable (validation
-  could not run: try again later), validation_timeout, pack_failed,
+  app_source_upload_limit_exceeded, invalid_base_source_id and
+  base_source_not_found (the recorded base is unusable) exit 4; stale_base (a
+  newer release exists: pull it, reapply, deploy again, or --no-base),
+  validation_unavailable (validation could not run: try again later),
+  validation_timeout, pack_failed,
   upload_failed, upload_expired, source_not_completable, wait_timeout,
   deploy_failed and interrupted (SIGINT/SIGTERM) exit 1 (see 'sureva deploy
   --help').

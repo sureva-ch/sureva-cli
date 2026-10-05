@@ -81,8 +81,10 @@ WHAT YOU GET (read this before building)
   - file permission bits are kept (releases stored before that was recorded
     extract without the executable bit). Group and other never get write access.
   After a successful pull, <dir>/.sureva/source.json records app_id, source_id,
-  release_tag, sha256 and the time. 'sureva deploy' never uploads .sureva/ and
-  reports the recorded release as base_source_id.
+  release_tag, sha256 and the time. 'sureva deploy' never uploads .sureva/, sends
+  the recorded release as the base of its upload (so a newer release is not
+  overwritten silently; see 'deploy --help') and moves the record to the release
+  it publishes.
 
 SAFETY
   The archive is refused, and nothing is extracted from it, when an entry has an

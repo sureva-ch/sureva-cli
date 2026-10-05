@@ -134,12 +134,25 @@ type SourceCompletion struct {
 	ValidationCode string `json:"validation_code,omitempty"`
 }
 
+type createSourceUploadRequest struct {
+	BaseSourceID string `json:"base_source_id"`
+}
+
 // CreateSourceUpload asks for an upload target for one new archive of an
 // upload-backed app. It creates a pending source; nothing is deployable until
 // the archive is uploaded, completed and validated.
-func (c *Client) CreateSourceUpload(ctx context.Context, orgID, appID string) (*SourceUpload, error) {
+//
+// baseSourceID is the release the archive was built from (the one pulled before
+// the change). When it is not empty the platform refuses to promote the archive
+// if that release is no longer the app's latest, so a newer release is not
+// silently replaced. Empty sends no body: an explicit overwrite.
+func (c *Client) CreateSourceUpload(ctx context.Context, orgID, appID, baseSourceID string) (*SourceUpload, error) {
+	var body any
+	if baseSourceID != "" {
+		body = createSourceUploadRequest{BaseSourceID: baseSourceID}
+	}
 	var resp SourceUpload
-	if err := c.post(ctx, sourcesPath(orgID, appID), nil, &resp); err != nil {
+	if err := c.post(ctx, sourcesPath(orgID, appID), body, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
