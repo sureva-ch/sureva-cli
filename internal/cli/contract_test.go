@@ -67,6 +67,8 @@ func TestContract_DeployErrorCodesOnTrigger(t *testing.T) {
 	}
 }
 
+// Only the download endpoint answers app_not_upload_backed (see PullCodes);
+// list and get never do, so no fixture invents it for them.
 func TestContract_SourcesGetAndListClassifyByCode(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
@@ -74,7 +76,6 @@ func TestContract_SourcesGetAndListClassifyByCode(t *testing.T) {
 		code       string
 		exit       int
 	}{
-		{"app_not_upload_backed", apiNotUploadBacked, 422, "github_backed_app", output.ExitValidation},
 		{"source_not_found", apiSourceNotFound, 404, "not_found", output.ExitNotFound},
 	} {
 		for _, sub := range [][]string{{"sources", "list", testAppID}, {"sources", "get", testAppID, "s1"}} {
