@@ -49,3 +49,49 @@ func (c *Client) GetSource(ctx context.Context, orgID, appID, sourceID string) (
 	}
 	return &resp, nil
 }
+
+// SourceUpload is what POST .../sources answers with: the new (pending) source,
+// the presigned S3 POST form that accepts exactly one archive for it, and the
+// limits that apply to that archive.
+type SourceUpload struct {
+	SourceID string `json:"source_id"`
+	Upload   struct {
+		URL string `json:"url"`
+		// Fields are opaque: they carry the signed policy and must be sent back
+		// verbatim, before the file part.
+		Fields map[string]string `json:"fields"`
+	} `json:"upload"`
+	ExpiresAt time.Time `json:"expires_at"`
+	// MaxBytes is the ceiling S3 enforces on the archive.
+	MaxBytes int64  `json:"max_bytes"`
+	Key      string `json:"key"`
+}
+
+// SourceCompletion is the 202 answer of the complete call. Validation runs
+// asynchronously, so Status is normally "validating"; "rejected" means the
+// platform could not even start it.
+type SourceCompletion struct {
+	SourceID string `json:"source_id"`
+	Status   string `json:"status"`
+}
+
+// CreateSourceUpload asks for an upload target for one new archive of an
+// upload-backed app. It creates a pending source; nothing is deployable until
+// the archive is uploaded, completed and validated.
+func (c *Client) CreateSourceUpload(ctx context.Context, orgID, appID string) (*SourceUpload, error) {
+	var resp SourceUpload
+	if err := c.post(ctx, sourcesPath(orgID, appID), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// CompleteSource tells the platform the archive has been uploaded, which starts
+// its validation.
+func (c *Client) CompleteSource(ctx context.Context, orgID, appID, sourceID string) (*SourceCompletion, error) {
+	var resp SourceCompletion
+	if err := c.post(ctx, sourcesPath(orgID, appID)+"/"+sourceID+"/complete", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
