@@ -29,6 +29,13 @@ type APIError struct {
 	// distinct failures share one status (two different 409s on app creation
 	// alone), and telling them apart needs the server's own code.
 	ServerCode string
+	// SourceStatus, ValidationCode and Environments are the detail fields
+	// cloud-api sends next to ServerCode on some errors: the status of the
+	// source a 409 refers to, why a rejected source was refused, and the
+	// environments a release is live in. Empty when the response had none.
+	SourceStatus   string
+	ValidationCode string
+	Environments   []string
 }
 
 func (e *APIError) Error() string {
@@ -39,9 +46,19 @@ func (e *APIError) Error() string {
 }
 
 // apiErrorBody is the JSON shape returned by cloud-api on error.
+//
+// cloud-api writes {"error": <message>, "code": <stable code>} and, for some
+// codes, adds flat sibling fields to the same object (writeErrorDetails in the
+// API): source_status and validation_code on a 409 source_not_ready,
+// source_status on a 409 source_not_completable, environments on a 409
+// source_is_live refusal (deleting a release, not a CLI command yet). Code and detail fields are absent on responses
+// from before the codes existed.
 type apiErrorBody struct {
-	Error string `json:"error"`
-	Code  string `json:"code"`
+	Error          string   `json:"error"`
+	Code           string   `json:"code"`
+	SourceStatus   string   `json:"source_status"`
+	ValidationCode string   `json:"validation_code"`
+	Environments   []string `json:"environments"`
 }
 
 // parseErrorResponse reads and closes the response body and constructs an *APIError.
@@ -68,10 +85,13 @@ func parseErrorResponse(resp *http.Response) *APIError {
 	}
 
 	return &APIError{
-		HTTPStatus: resp.StatusCode,
-		Code:       code,
-		Message:    msg,
-		ServerCode: envelope.Code,
+		HTTPStatus:     resp.StatusCode,
+		Code:           code,
+		Message:        msg,
+		ServerCode:     envelope.Code,
+		SourceStatus:   envelope.SourceStatus,
+		ValidationCode: envelope.ValidationCode,
+		Environments:   envelope.Environments,
 	}
 }
 

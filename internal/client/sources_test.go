@@ -3,8 +3,12 @@ package client_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/sureva-ch/sureva-cli/internal/client"
 )
 
 // The payload mirrors cloud-api's appSourceView (models.AppSource plus
@@ -175,5 +179,79 @@ func TestEmptySourceIDIsRejectedWithoutARequest(t *testing.T) {
 	}
 	if hit {
 		t.Error("a request was sent for an empty id")
+	}
+}
+
+// A rejected row as the API writes it: validation_code on the row and
+// retryable added by the view, next to the base the upload declared.
+func TestGetSource_RejectedRowKeepsCodeRetryableAndBase(t *testing.T) {
+	t.Parallel()
+	c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"s1","app_id":"app-1","seq":4,"status":"rejected","aws_region":"us-east-2","upload_key":"k",` +
+			`"validation_error":"prose","validation_code":"promote_failed","base_source_id":"3c1b",` +
+			`"created_at":"2026-10-02T10:00:00Z","updated_at":"2026-10-02T10:00:00Z","retryable":true}`))
+	})
+
+	got, err := c.GetSource(context.Background(), "org-1", "app-1", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ValidationCode == nil || *got.ValidationCode != "promote_failed" || !got.IsRetryable() ||
+		got.BaseSourceID == nil || *got.BaseSourceID != "3c1b" {
+		t.Errorf("source = %+v", got)
+	}
+}
+
+func TestAppSource_IsRetryableNeedsTheFlagOnARejectedRow(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	for _, tc := range []struct {
+		name string
+		s    *client.AppSource
+		want bool
+	}{
+		{"nil", nil, false},
+		{"rejected, retryable", &client.AppSource{Status: "rejected", Retryable: &yes}, true},
+		{"rejected, not retryable", &client.AppSource{Status: "rejected", Retryable: &no}, false},
+		{"rejected, flag absent (older API)", &client.AppSource{Status: "rejected"}, false},
+		{"ready", &client.AppSource{Status: "ready", Retryable: &yes}, false},
+	} {
+		if got := tc.s.IsRetryable(); got != tc.want {
+			t.Errorf("%s: IsRetryable = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The error body's code and detail fields reach the *APIError, and a body
+// without them leaves them empty.
+func TestAPIError_KeepsCodeAndDetailFields(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body                         string
+		status                             int
+		code, sourceStatus, validationCode string
+		envs                               []string
+	}{
+		{"source_not_ready", `{"code":"source_not_ready","error":"m","source_status":"rejected","validation_code":"archive_empty"}`, 409, "source_not_ready", "rejected", "archive_empty", nil},
+		{"source_not_completable", `{"code":"source_not_completable","error":"m","source_status":"ready"}`, 409, "source_not_completable", "ready", "", nil},
+		{"source_is_live", `{"code":"source_is_live","error":"m","environments":["production","staging"]}`, 409, "source_is_live", "", "", []string{"production", "staging"}},
+		{"no code (older API)", `{"error":"m"}`, 409, "", "", "", nil},
+	} {
+		c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		})
+		_, err := c.GetSource(context.Background(), "org-1", "app-1", "s1")
+		var apiErr *client.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("%s: err = %v", tc.name, err)
+		}
+		if apiErr.ServerCode != tc.code || apiErr.SourceStatus != tc.sourceStatus || apiErr.ValidationCode != tc.validationCode ||
+			strings.Join(apiErr.Environments, ",") != strings.Join(tc.envs, ",") {
+			t.Errorf("%s: %+v", tc.name, apiErr)
+		}
+		if apiErr.Message != "m" || apiErr.HTTPStatus != tc.status {
+			t.Errorf("%s: message/status changed: %+v", tc.name, apiErr)
+		}
 	}
 }

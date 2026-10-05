@@ -20,7 +20,7 @@ AGENT USAGE
     sureva deploys trigger <app-id> --org <slug> --source-id <source-id>
 
   Inspect one release, including why it was rejected:
-    sureva sources get <app-id> <source-id> --org <slug> | jq '.validation_error'
+    sureva sources get <app-id> <source-id> --org <slug> | jq '{validation_code, retryable, validation_error}'
 
   Fetch the code of an app to work on it (dependencies and environment
   variables are not in it; see 'sources pull --help'):
@@ -28,11 +28,21 @@ AGENT USAGE
 
 STATUS
   pending|validating  not deployable yet
-  rejected            validation refused it; see validation_error
+  rejected            validation refused it; validation_code is the stable
+                      reason and retryable says whether sending the same
+                      archive again can succeed (true: the platform failed,
+                      false: the archive has to change); validation_error is
+                      prose for a person
   ready               deployable; "available" is false when the stored
                       version is gone, in which case a deploy exits 1 with
                       code source_expired
-  expired             no longer stored; upload the source again`,
+  expired             no longer stored; upload the source again
+
+ERRORS (stderr envelope "code"; the API's own code is in details.api_code)
+  not_found                (3) unknown app or release.
+  github_backed_app        (4) the app deploys from GitHub; it has no releases.
+  auth_error               (2) missing or expired credentials.
+  network_error            (5) no HTTP response.`,
 	}
 	sources.AddCommand(newSourcesListCmd())
 	sources.AddCommand(newSourcesGetCmd())
@@ -67,7 +77,7 @@ that is rendered through the standard envelope.`,
 
 			sources, err := c.ListSources(cmd.Context(), orgID, args[0])
 			if err != nil {
-				return handleAPIError(r, err)
+				return handleAPIError(r, classifySourceError(err))
 			}
 			if err := r.Render(sources); err != nil {
 				return &ExitError{Code: output.ExitGeneral}
@@ -82,8 +92,8 @@ func newSourcesGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <app-id> <source-id>",
 		Short: "Get one source release of an upload-backed app",
-		Long: `Get one source release of an upload-backed app, including validation_error
-when the archive was rejected.
+		Long: `Get one source release of an upload-backed app, including validation_code,
+retryable and validation_error when the archive was rejected.
 
 VALIDATION / INPUTS
   <app-id>: application ID returned by apps list/create.
@@ -103,7 +113,7 @@ VALIDATION / INPUTS
 
 			source, err := c.GetSource(cmd.Context(), orgID, args[0], args[1])
 			if err != nil {
-				return handleAPIError(r, err)
+				return handleAPIError(r, classifySourceError(err))
 			}
 			if err := r.Render(source); err != nil {
 				return &ExitError{Code: output.ExitGeneral}

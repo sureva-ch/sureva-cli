@@ -270,10 +270,17 @@ func classifyDownloadError(err error, latest bool, repo string) error {
 		return err
 	}
 	switch {
-	case apiErr.ServerCode == "app_not_upload_backed":
-		apiErr.Code = "github_backed_app"
+	case apiErr.ServerCode == apiCodeAppNotUploadBacked:
+		apiErr.Code = codeGitHubBacked
 		apiErr.Message = githubBackedMessage(repo)
-	case apiErr.HTTPStatus == http.StatusNotFound && latest:
+	// no_source is the name pull has always used for "nothing to pull yet" and
+	// stays, whether the API says so with no_ready_source or, as the download
+	// endpoint does today, with a bare 404 on the "latest" alias (the
+	// status-only branch is the removable fallback). deploy and deploys trigger
+	// say no_ready_source for the same API state: there the next step is a
+	// deploy, here it is starting a project.
+	case apiErr.ServerCode == apiCodeNoReadySource,
+		apiErr.ServerCode == "" && apiErr.HTTPStatus == http.StatusNotFound && latest:
 		apiErr.Code = "no_source"
 		apiErr.Message = "this app has no ready release yet: start a new project here and publish it with 'sureva deploy'"
 	default:

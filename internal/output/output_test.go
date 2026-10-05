@@ -222,3 +222,28 @@ func TestRenderError_AlwaysJSONEvenInTableMode(t *testing.T) {
 		t.Fatalf("error output is not JSON in table mode: %v\nraw: %s", err, errBuf.String())
 	}
 }
+
+// Details are added to the envelope only when there are some, so the envelope
+// of a failure without them is byte-for-byte what it was.
+func TestRenderErrorDetails_AddsDetailsOnlyWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	var withBuf, withoutBuf bytes.Buffer
+	r := NewRenderer(FormatJSON, &bytes.Buffer{}, &withBuf)
+	code := r.RenderErrorDetails("not ready", "source_not_ready", 409, map[string]any{"source_status": "rejected"})
+	if code != ExitGeneral {
+		t.Errorf("exit = %d, want %d", code, ExitGeneral)
+	}
+	var env struct {
+		Details map[string]any `json:"details"`
+	}
+	if err := json.Unmarshal(withBuf.Bytes(), &env); err != nil || env.Details["source_status"] != "rejected" {
+		t.Errorf("envelope = %s (%v)", withBuf.String(), err)
+	}
+
+	r = NewRenderer(FormatJSON, &bytes.Buffer{}, &withoutBuf)
+	r.RenderErrorDetails("x", "general_error", 500, nil)
+	if strings.Contains(withoutBuf.String(), "details") {
+		t.Errorf("an envelope without details must not carry the key: %s", withoutBuf.String())
+	}
+}

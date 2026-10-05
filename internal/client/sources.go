@@ -37,11 +37,30 @@ type AppSource struct {
 	StrippedPrefix *string `json:"stripped_prefix,omitempty"`
 	// ValidationError is why a rejected archive was refused.
 	ValidationError *string `json:"validation_error,omitempty"`
+	// ValidationCode is the stable, machine-readable cause of the rejection;
+	// ValidationError is prose and may be reworded. Absent on a row rejected
+	// before the API recorded codes.
+	ValidationCode *string `json:"validation_code,omitempty"`
+	// Retryable is present only on rejected rows: true when the cause was the
+	// platform's and sending the same archive again can succeed, false when the
+	// archive itself has to change.
+	Retryable *bool `json:"retryable,omitempty"`
+	// BaseSourceID is the release the upload declared it was built from, when
+	// it declared one.
+	BaseSourceID *string `json:"base_source_id,omitempty"`
 	// Available reports whether the stored version can still be deployed. It is
 	// only present for rows that were promoted.
 	Available *bool     `json:"available,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// IsRetryable reports whether the API marked this rejected source as one that
+// sending the same archive again can cure. A row without the flag (an API that
+// predates it, or a source that was not rejected) is not retryable: repeating a
+// refusal that will repeat is the worse error.
+func (s *AppSource) IsRetryable() bool {
+	return s != nil && s.Status == "rejected" && s.Retryable != nil && *s.Retryable
 }
 
 func sourcesPath(orgID, appID string) string {
@@ -93,6 +112,8 @@ type SourceUpload struct {
 type SourceCompletion struct {
 	SourceID string `json:"source_id"`
 	Status   string `json:"status"`
+	// ValidationCode is set when Status is "rejected".
+	ValidationCode string `json:"validation_code,omitempty"`
 }
 
 // CreateSourceUpload asks for an upload target for one new archive of an

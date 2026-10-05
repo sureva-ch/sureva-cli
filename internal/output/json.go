@@ -20,14 +20,19 @@ type errorEnvelope struct {
 	Error      string `json:"error"`
 	Code       string `json:"code"`
 	HTTPStatus int    `json:"http_status,omitempty"`
+	// Details carries machine-readable facts that come with the failure (for
+	// example the API's own error code or a source's validation_code). It is
+	// omitted when there are none, so an envelope without details is unchanged.
+	Details map[string]any `json:"details,omitempty"`
 }
 
 // writeError writes an error envelope to w as JSON.
-func writeError(w io.Writer, message, code string, httpStatus int) error {
+func writeError(w io.Writer, message, code string, httpStatus int, details map[string]any) error {
 	env := errorEnvelope{
 		Error:      message,
 		Code:       code,
 		HTTPStatus: httpStatus,
+		Details:    details,
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

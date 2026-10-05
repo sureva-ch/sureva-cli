@@ -63,6 +63,13 @@ func (r *Renderer) Render(v any) error {
 // httpStatus == 0 maps to ExitNetwork when there is no HTTP response.
 // Pass -1 to suppress the http_status field (client-side validation errors).
 func (r *Renderer) RenderError(message, code string, httpStatus int) int {
+	return r.RenderErrorDetails(message, code, httpStatus, nil)
+}
+
+// RenderErrorDetails is RenderError with machine-readable details added to the
+// envelope as "details". Empty details are omitted, so the envelope of a
+// failure that has none is unchanged.
+func (r *Renderer) RenderErrorDetails(message, code string, httpStatus int, details map[string]any) int {
 	var exitCode int
 	switch {
 	case httpStatus == 0:
@@ -72,6 +79,6 @@ func (r *Renderer) RenderError(message, code string, httpStatus int) int {
 	default:
 		exitCode = HTTPStatusToExitCode(httpStatus)
 	}
-	_ = writeError(r.err, message, code, max(httpStatus, 0))
+	_ = writeError(r.err, message, code, max(httpStatus, 0), details)
 	return exitCode
 }
