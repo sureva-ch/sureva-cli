@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -60,13 +58,20 @@ VALIDATION / INPUTS
   --env-id: environment UUID; defaults to the production environment when empty.
   --wait-interval/--wait-timeout: Go duration strings (examples: 1s, 30s, 15m).
 
-ERRORS (stderr envelope "code"; all exit 1 unless noted)
-  source_expired    410: the release is no longer stored; upload the source again.
-  source_not_ready  409: the release is pending, validating, rejected or expired.
-  not_found         404 (exit 3): unknown release, or no ready release to deploy.
-  validation_error  400 (exit 4): --tag on an upload-backed app, or --source-id
-                    on a GitHub-backed one.
-  deploy_failed     with --wait: the deployment itself failed or was cancelled.`,
+ERRORS (stderr envelope "code"; exit code in parentheses). The classification
+follows the API's own error code, which is repeated in details.api_code.
+  source_expired      (1) 410: the release is no longer stored; upload the
+                      source again.
+  source_not_ready    (1) 409: the release is pending, validating, rejected or
+                      expired; details.source_status says which and, for a
+                      rejected one, details.validation_code why.
+  no_ready_source     (3) 404: no --source-id was given and the app has no
+                      ready release; run 'sureva deploy' first.
+  not_found           (3) 404: unknown release.
+  validation_error    (4) 400: --tag on an upload-backed app, or --source-id
+                      on a GitHub-backed one.
+  deploy_failed       (1) with --wait: the deployment itself failed or was
+                      cancelled.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tag, _ := cmd.Flags().GetString("tag")
@@ -87,6 +92,11 @@ ERRORS (stderr envelope "code"; all exit 1 unless noted)
 					"validation_error",
 					-1,
 				)
+				return &ExitError{Code: output.ExitValidation}
+			}
+
+			if wait && waitInterval <= 0 {
+				r.RenderError(waitIntervalMessage, "validation_error", -1)
 				return &ExitError{Code: output.ExitValidation}
 			}
 
@@ -257,24 +267,4 @@ VALIDATION / INPUTS
 			return nil
 		},
 	}
-}
-
-// classifySourceError gives the two source-release failures of a deploy their
-// own envelope code. Both exit 1, and a 409 is not unique to them (a deployment
-// already in progress is one too), so the status alone does not tell a caller
-// what to do. A 410 can only mean the stored version is gone. A 409 is
-// recognised by the cloud-api message prefix "this source archive is <status>";
-// any other 409 keeps its status-derived code.
-func classifySourceError(err error) error {
-	var apiErr *client.APIError
-	if !errors.As(err, &apiErr) {
-		return err
-	}
-	switch {
-	case apiErr.HTTPStatus == http.StatusGone:
-		apiErr.Code = "source_expired"
-	case apiErr.HTTPStatus == http.StatusConflict && strings.HasPrefix(apiErr.Message, "this source archive is "):
-		apiErr.Code = "source_not_ready"
-	}
-	return apiErr
 }

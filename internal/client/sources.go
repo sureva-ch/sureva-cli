@@ -37,11 +37,48 @@ type AppSource struct {
 	StrippedPrefix *string `json:"stripped_prefix,omitempty"`
 	// ValidationError is why a rejected archive was refused.
 	ValidationError *string `json:"validation_error,omitempty"`
+	// ValidationCode is the stable, machine-readable cause of the rejection;
+	// ValidationError is prose and may be reworded. Absent on a row rejected
+	// before the API recorded codes.
+	ValidationCode *string `json:"validation_code,omitempty"`
+	// Retryable is present only on rejected rows: true when the cause was the
+	// platform's and sending the same archive again can succeed, false when the
+	// archive itself has to change.
+	Retryable *bool `json:"retryable,omitempty"`
+	// Attempts is how many times validation was started for this source and
+	// MaxAttempts the limit (the first complete included). Absent from an API
+	// that does not limit validation attempts.
+	Attempts    *int `json:"attempts,omitempty"`
+	MaxAttempts *int `json:"max_attempts,omitempty"`
+	// BaseSourceID is the release the upload declared it was built from, when
+	// it declared one.
+	BaseSourceID *string `json:"base_source_id,omitempty"`
 	// Available reports whether the stored version can still be deployed. It is
 	// only present for rows that were promoted.
 	Available *bool     `json:"available,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// IsRetryable reports whether the API marked this rejected source as one that
+// sending the same archive again can cure. A row without the flag (an API that
+// predates it, or a source that was not rejected) is not retryable: repeating a
+// refusal that will repeat is the worse error.
+func (s *AppSource) IsRetryable() bool {
+	return s != nil && s.Status == "rejected" && s.Retryable != nil && *s.Retryable
+}
+
+// AttemptsExhausted reports whether the API says this source used every
+// validation attempt it has. False when the row carries no counters.
+func (s *AppSource) AttemptsExhausted() bool {
+	return s != nil && s.Attempts != nil && s.MaxAttempts != nil && *s.MaxAttempts > 0 && *s.Attempts >= *s.MaxAttempts
+}
+
+// HasAttemptLimit reports whether the row says how many validation attempts the
+// source may use, which is how the CLI tells an API that limits them from one
+// that does not.
+func (s *AppSource) HasAttemptLimit() bool {
+	return s != nil && s.MaxAttempts != nil && *s.MaxAttempts > 0
 }
 
 func sourcesPath(orgID, appID string) string {
@@ -93,6 +130,8 @@ type SourceUpload struct {
 type SourceCompletion struct {
 	SourceID string `json:"source_id"`
 	Status   string `json:"status"`
+	// ValidationCode is set when Status is "rejected".
+	ValidationCode string `json:"validation_code,omitempty"`
 }
 
 // CreateSourceUpload asks for an upload target for one new archive of an

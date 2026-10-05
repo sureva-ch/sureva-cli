@@ -178,6 +178,11 @@ no repository, and releases are listed with 'sources list' and deployed with
 				return err
 			}
 
+			if wait && waitInterval <= 0 {
+				r.RenderError(waitIntervalMessage, "validation_error", -1)
+				return &ExitError{Code: output.ExitValidation}
+			}
+
 			// Client-side validation: --runtime required for non-web app types.
 			if appType != "web" && runtime == "" {
 				r.RenderError(

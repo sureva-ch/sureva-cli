@@ -505,3 +505,21 @@ func TestDeploysTrigger_SourceErrors_AreDistinguishable(t *testing.T) {
 		})
 	}
 }
+
+// A non-positive --wait-interval would panic the polling ticker: it is refused
+// up front, before any request.
+func TestDeploysTrigger_RejectsANonPositiveWaitInterval(t *testing.T) {
+	for _, v := range []string{"0", "-1s"} {
+		t.Run(v, func(t *testing.T) {
+			mux := deploys_mux()
+			mux.HandleFunc("/v1/orgs/"+testOrgID+"/apps/"+testAppID+"/deployments", func(http.ResponseWriter, *http.Request) {
+				t.Error("nothing may be triggered")
+			})
+			_, errBuf, exec := newTestRoot(t, newTestServer(t, mux))
+
+			err := exec("deploys", "trigger", testAppID, "--org", testOrgSlug, "--tag", "v1", "--wait", "--wait-interval", v)
+
+			assertEnvelope(t, errBuf, exitCode(err), output.ExitValidation, "validation_error", nil)
+		})
+	}
+}

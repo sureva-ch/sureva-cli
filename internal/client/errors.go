@@ -29,6 +29,20 @@ type APIError struct {
 	// distinct failures share one status (two different 409s on app creation
 	// alone), and telling them apart needs the server's own code.
 	ServerCode string
+	// SourceStatus, ValidationCode and Environments are the detail fields
+	// cloud-api sends next to ServerCode on some errors: the status of the
+	// source a 409 refers to, why a rejected source was refused, and the
+	// environments a release is live in. Empty when the response had none.
+	SourceStatus   string
+	ValidationCode string
+	Environments   []string
+	// RetryAfterSeconds is how long a refused retry has to wait
+	// (source_retry_too_soon); Attempts and MaxAttempts report the validation
+	// attempts a source used against its limit (source_retry_limit_reached).
+	// Zero when the response had none.
+	RetryAfterSeconds int
+	Attempts          int
+	MaxAttempts       int
 }
 
 func (e *APIError) Error() string {
@@ -39,10 +53,30 @@ func (e *APIError) Error() string {
 }
 
 // apiErrorBody is the JSON shape returned by cloud-api on error.
+//
+// cloud-api writes {"error": <message>, "code": <stable code>} and, for some
+// codes, adds flat sibling fields to the same object (writeErrorDetails in the
+// API): source_status and validation_code on a 409 source_not_ready,
+// source_status on a 409 source_not_completable, environments on a 409
+// source_is_live refusal (deleting a release, not a CLI command yet),
+// retry_after_seconds on a 409 source_retry_too_soon, attempts and max_attempts
+// on a 409 source_retry_limit_reached. Code and detail fields are absent on
+// responses from before the codes existed.
 type apiErrorBody struct {
-	Error string `json:"error"`
-	Code  string `json:"code"`
+	Error             string   `json:"error"`
+	Code              string   `json:"code"`
+	SourceStatus      string   `json:"source_status"`
+	ValidationCode    string   `json:"validation_code"`
+	Environments      []string `json:"environments"`
+	RetryAfterSeconds int      `json:"retry_after_seconds"`
+	Attempts          int      `json:"attempts"`
+	MaxAttempts       int      `json:"max_attempts"`
 }
+
+// maxErrorBodyBytes bounds how much of an error response is read. A real
+// envelope is a few hundred bytes; the limit only keeps a misbehaving endpoint
+// from making the CLI buffer an unbounded body.
+const maxErrorBodyBytes = 1 << 20
 
 // parseErrorResponse reads and closes the response body and constructs an *APIError.
 // A 401 response always overrides the server message with actionable guidance that
@@ -52,7 +86,7 @@ func parseErrorResponse(resp *http.Response) *APIError {
 		_ = resp.Body.Close()
 	}()
 
-	data, _ := io.ReadAll(resp.Body)
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 	var envelope apiErrorBody
 	_ = json.Unmarshal(data, &envelope)
 
@@ -68,10 +102,17 @@ func parseErrorResponse(resp *http.Response) *APIError {
 	}
 
 	return &APIError{
-		HTTPStatus: resp.StatusCode,
-		Code:       code,
-		Message:    msg,
-		ServerCode: envelope.Code,
+		HTTPStatus:     resp.StatusCode,
+		Code:           code,
+		Message:        msg,
+		ServerCode:     envelope.Code,
+		SourceStatus:   envelope.SourceStatus,
+		ValidationCode: envelope.ValidationCode,
+		Environments:   envelope.Environments,
+
+		RetryAfterSeconds: max(envelope.RetryAfterSeconds, 0),
+		Attempts:          max(envelope.Attempts, 0),
+		MaxAttempts:       max(envelope.MaxAttempts, 0),
 	}
 }
 

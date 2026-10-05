@@ -63,7 +63,7 @@ func newAuthenticatedClient(cmd *cobra.Command) (*client.Client, *output.Rendere
 func handleAPIError(r *output.Renderer, err error) error {
 	var apiErr *client.APIError
 	if errors.As(err, &apiErr) {
-		code := r.RenderError(apiErr.Message, apiErr.Code, apiErr.HTTPStatus)
+		code := r.RenderErrorDetails(apiErr.Message, apiErr.Code, apiErr.HTTPStatus, apiErrorDetails(apiErr))
 		return &ExitError{Code: code}
 	}
 	// Unexpected error (e.g. JSON decode bug) — treat as general.

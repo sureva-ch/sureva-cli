@@ -27,21 +27,43 @@ const (
 	deploySrcID   = "src-new"
 )
 
+type fakeReply struct {
+	code int
+	body string
+}
+
 // deployFake is an API plus an S3 form endpoint, both local.
 type deployFake struct {
 	t   *testing.T
 	api string
 
-	mu          sync.Mutex
-	appJSON     string
-	maxBytes    int64
-	s3Status    int
-	s3Body      string
-	sourceSeq   []string // statuses GET source answers with, last one repeats
-	rejectWhy   string
-	deployState []string // statuses GET deployment answers with, last one repeats
-	createCode  int      // overrides POST /sources when set
-	createBody  string
+	mu        sync.Mutex
+	appJSON   string
+	maxBytes  int64
+	s3Status  int
+	s3Body    string
+	sourceSeq []string // statuses GET source answers with, last one repeats
+	rejectWhy string
+	// rejectCode and rejectRetryable are the validation_code and retryable the
+	// API adds to a rejected source; empty/nil means an API that sends neither.
+	rejectCode      string
+	rejectRetryable *bool
+	// completeScript answers the complete calls after the first, in order; once
+	// it is used up they answer 202 again. completeHook runs after each of them
+	// was answered, with the call's number (the first is 1).
+	completeScript []fakeReply
+	completeHook   func(n int)
+	// rowHook may add fields to the source row GET source answers with.
+	rowHook func(row map[string]any, status string)
+	// repeatCompleteCode/Body, when set, answer every complete call after the first.
+	repeatCompleteCode int
+	repeatCompleteBody string
+	deployState        []string // statuses GET deployment answers with, last one repeats
+	createCode         int      // overrides POST /sources when set
+	createBody         string
+	// deployCode/deployErrBody override POST /deployments when set.
+	deployCode    int
+	deployErrBody string
 	// s3Reached, when set, is closed on the first upload request, which then
 	// blocks until s3Release is closed (the body is left unread, so the server
 	// cannot notice the client going away on its own).
@@ -87,7 +109,21 @@ func newDeployFake(t *testing.T) *deployFake {
 	mux.HandleFunc("POST "+deployAppPath+"/sources/"+deploySrcID+"/complete", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.completed++
+		n := f.completed
 		f.mu.Unlock()
+		if n > 1 && f.completeHook != nil {
+			defer f.completeHook(n)
+		}
+		if n > 1 && n-2 < len(f.completeScript) {
+			w.WriteHeader(f.completeScript[n-2].code)
+			_, _ = w.Write([]byte(f.completeScript[n-2].body))
+			return
+		}
+		if n > 1 && f.repeatCompleteCode != 0 {
+			w.WriteHeader(f.repeatCompleteCode)
+			_, _ = w.Write([]byte(f.repeatCompleteBody))
+			return
+		}
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"source_id":"` + deploySrcID + `","status":"validating"}`))
 	})
@@ -99,10 +135,24 @@ func newDeployFake(t *testing.T) *deployFake {
 		body := map[string]any{"id": deploySrcID, "app_id": testAppID, "seq": 3, "status": status, "release_tag": "src-3"}
 		if status == "rejected" {
 			body["validation_error"] = f.rejectWhy
+			if f.rejectCode != "" {
+				body["validation_code"] = f.rejectCode
+			}
+			if f.rejectRetryable != nil {
+				body["retryable"] = *f.rejectRetryable
+			}
+		}
+		if f.rowHook != nil {
+			f.rowHook(body, status)
 		}
 		_ = json.NewEncoder(w).Encode(body)
 	})
 	mux.HandleFunc("POST "+deployAppPath+"/deployments", func(w http.ResponseWriter, r *http.Request) {
+		if f.deployCode != 0 {
+			w.WriteHeader(f.deployCode)
+			_, _ = w.Write([]byte(f.deployErrBody))
+			return
+		}
 		_ = json.NewDecoder(r.Body).Decode(&f.deployBody)
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"deploy-1","app_id":"app-1","environment_id":"env-1","release_tag":"src-3","status":"pending"}`))
@@ -594,7 +644,7 @@ func TestDeployHelpNamesFailureCodes(t *testing.T) {
 	if err := exec("deploy", "--help"); exitCode(err) != 0 {
 		t.Fatalf("exit %d", exitCode(err))
 	}
-	for _, want := range []string{"archive_too_large", "source_rejected", "validation_timeout", "deploy_failed", "auth_error", "pack_failed", "interrupted"} {
+	for _, want := range []string{"archive_too_large", "source_rejected", "validation_unavailable", "no_ready_source", "app_source_upload_limit_exceeded", "validation_timeout", "deploy_failed", "auth_error", "pack_failed", "interrupted"} {
 		if !strings.Contains(outBuf.String(), want) {
 			t.Errorf("deploy --help is missing %q", want)
 		}
@@ -645,5 +695,183 @@ func TestDeploy_InterruptedDuringUploadRemovesArchive(t *testing.T) {
 	}
 	if m, _ := filepath.Glob(filepath.Join(tmp, "sureva-deploy-*.zip")); len(m) != 0 {
 		t.Errorf("temporary archive left behind: %v", m)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestDeploy_RejectionSurfacesValidationCodeAndRetryable(t *testing.T) {
+	f := newDeployFake(t)
+	f.sourceSeq = []string{"rejected"}
+	f.rejectWhy = "the archive appears to contain credentials in src/config.js"
+	f.rejectCode, f.rejectRetryable = "credentials_found", boolPtr(false)
+	outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+	err := exec(deployArgs(deployProject(t))...)
+
+	if got := exitCode(err); got != output.ExitValidation {
+		t.Fatalf("exit = %d, want %d", got, output.ExitValidation)
+	}
+	env := decodeJSON(t, errBuf)
+	details, _ := env["details"].(map[string]any)
+	if env["code"] != "source_rejected" || details["validation_code"] != "credentials_found" || details["retryable"] != false {
+		t.Errorf("envelope = %v", env)
+	}
+	src, _ := decodeJSON(t, outBuf)["source"].(map[string]any)
+	if src["validation_code"] != "credentials_found" || src["retryable"] != false {
+		t.Errorf("source = %v", src)
+	}
+	if f.completed != 1 {
+		t.Errorf("a refusal about the archive must not be retried; complete called %d times", f.completed)
+	}
+}
+
+// A retryable rejection means validation never judged the archive: complete is
+// repeated and the deploy goes on when a later attempt succeeds.
+func TestDeploy_RetryableRejectionIsRetriedUntilValidationSucceeds(t *testing.T) {
+	f := newDeployFake(t)
+	f.sourceSeq = []string{"validating", "rejected", "validating", "rejected", "ready"}
+	f.rejectCode, f.rejectRetryable = "promote_failed", boolPtr(true)
+	outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+	err := exec(deployArgs(deployProject(t))...)
+
+	if err != nil {
+		t.Fatalf("exit %d; stderr: %s", exitCode(err), errBuf)
+	}
+	if f.completed != 3 {
+		t.Errorf("complete called %d times, want 3 (first + 2 retries)", f.completed)
+	}
+	res := decodeJSON(t, outBuf)
+	if res["validation_retries"] != float64(2) {
+		t.Errorf("validation_retries = %v, want 2", res["validation_retries"])
+	}
+	if f.deployBody == nil {
+		t.Error("the deployment must follow a successful validation")
+	}
+}
+
+func TestDeploy_RetryableRejectionGivesUpWithValidationUnavailable(t *testing.T) {
+	f := newDeployFake(t)
+	f.sourceSeq = []string{"rejected"} // every read, including after each retry
+	f.rejectWhy = "the archive passed validation but could not be stored."
+	f.rejectCode, f.rejectRetryable = "promote_failed", boolPtr(true)
+	outBuf, errBuf, exec := newTestRoot(t, f.api)
+
+	err := exec(deployArgs(deployProject(t))...)
+
+	if got := exitCode(err); got != output.ExitGeneral {
+		t.Fatalf("exit = %d, want %d", got, output.ExitGeneral)
+	}
+	env := decodeJSON(t, errBuf)
+	details, _ := env["details"].(map[string]any)
+	if env["code"] != "validation_unavailable" || details["validation_code"] != "promote_failed" || details["retryable"] != true {
+		t.Errorf("envelope = %v", env)
+	}
+	if f.completed != 1+3 {
+		t.Errorf("complete called %d times, want the first plus 3 retries", f.completed)
+	}
+	if res := decodeJSON(t, outBuf); res["validation_retries"] != float64(3) {
+		t.Errorf("validation_retries = %v, want 3", res["validation_retries"])
+	}
+	if f.deployBody != nil {
+		t.Error("nothing may be deployed")
+	}
+}
+
+// A rejection from an API that sends no retryable flag is never retried.
+func TestDeploy_RejectionWithoutRetryableFlagIsNotRetried(t *testing.T) {
+	f := newDeployFake(t)
+	f.sourceSeq = []string{"rejected"}
+	f.rejectWhy = "old reason"
+	_, errBuf, exec := newTestRoot(t, f.api)
+
+	_ = exec(deployArgs(deployProject(t))...)
+
+	if env := decodeJSON(t, errBuf); env["code"] != "source_rejected" || f.completed != 1 {
+		t.Errorf("envelope = %v, complete calls = %d", env, f.completed)
+	}
+}
+
+// --wait-timeout bounds validation including the retries and their pauses.
+func TestDeploy_RetriesAreBoundedByWaitTimeout(t *testing.T) {
+	f := newDeployFake(t)
+	f.sourceSeq = []string{"rejected"}
+	f.rejectCode, f.rejectRetryable = "validation_timeout", boolPtr(true)
+	_, errBuf, exec := newTestRoot(t, f.api)
+
+	// The first poll lands at 200ms and the pause after it is 400ms, past the 250ms bound.
+	err := exec("deploy", deployProject(t), "--app", testAppID, "--org", testOrgSlug,
+		"--wait-interval", "200ms", "--wait-timeout", "250ms")
+
+	if got := exitCode(err); got != output.ExitGeneral {
+		t.Fatalf("exit = %d", got)
+	}
+	if env := decodeJSON(t, errBuf); env["code"] != "validation_timeout" {
+		t.Errorf("envelope = %v", env)
+	}
+	if f.completed != 1 {
+		t.Errorf("complete called %d times, want 1", f.completed)
+	}
+}
+
+func TestDeploy_RetryFailingToCompleteIsClassifiedByTheAPICode(t *testing.T) {
+	f := newDeployFake(t)
+	f.sourceSeq = []string{"rejected"}
+	f.rejectCode, f.rejectRetryable = "dispatch_failed", boolPtr(true)
+	f.repeatCompleteCode = http.StatusConflict
+	f.repeatCompleteBody = apiNotCompletable
+	_, errBuf, exec := newTestRoot(t, f.api)
+
+	err := exec(deployArgs(deployProject(t))...)
+
+	if got := exitCode(err); got != output.ExitGeneral {
+		t.Fatalf("exit = %d", got)
+	}
+	env := decodeJSON(t, errBuf)
+	details, _ := env["details"].(map[string]any)
+	if env["code"] != "source_not_completable" || details["source_status"] != "ready" || details["api_code"] != "source_not_completable" {
+		t.Errorf("envelope = %v", env)
+	}
+}
+
+func TestDeploy_UploadLimitAndTriggerCodes(t *testing.T) {
+	cases := []struct {
+		name   string
+		create bool // the error comes from POST /sources, otherwise from POST /deployments
+		status int
+		body   string
+		code   string
+		exit   int
+	}{
+		{"daily limit", true, 422, `{"error":"app has reached the maximum number of source uploads for today","code":"app_source_upload_limit_exceeded"}`, "app_source_upload_limit_exceeded", output.ExitValidation},
+		{"source not ready", false, 409, `{"error":"this source archive is rejected and cannot be deployed; only a ready archive can","code":"source_not_ready","source_status":"rejected","validation_code":"archive_empty"}`, "source_not_ready", output.ExitGeneral},
+		{"source not ready, reworded", false, 409, `{"error":"the release is not usable","code":"source_not_ready","source_status":"pending"}`, "source_not_ready", output.ExitGeneral},
+		{"source expired", false, 410, `{"error":"gone","code":"source_expired"}`, "source_expired", output.ExitGeneral},
+		{"no ready source", false, 404, `{"error":"nothing","code":"no_ready_source"}`, "no_ready_source", output.ExitNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newDeployFake(t)
+			if tc.create {
+				f.createCode, f.createBody = tc.status, tc.body
+			} else {
+				f.deployCode, f.deployErrBody = tc.status, tc.body
+			}
+			_, errBuf, exec := newTestRoot(t, f.api)
+
+			err := exec(deployArgs(deployProject(t))...)
+
+			if got := exitCode(err); got != tc.exit {
+				t.Fatalf("exit = %d, want %d", got, tc.exit)
+			}
+			env := decodeJSON(t, errBuf)
+			if env["code"] != tc.code {
+				t.Errorf("code = %v, want %s; envelope %v", env["code"], tc.code, env)
+			}
+			if details, _ := env["details"].(map[string]any); details["api_code"] != tc.code {
+				t.Errorf("details = %v", env["details"])
+			}
+		})
 	}
 }

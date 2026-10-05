@@ -30,10 +30,13 @@ type deployResult struct {
 	AppID string `json:"app_id"`
 	// BaseSourceID is the release the directory was pulled from, read from
 	// .sureva/source.json. It is reported only: it is not sent to the API.
-	BaseSourceID string             `json:"base_source_id,omitempty"`
-	Archive      *archiveSummary    `json:"archive,omitempty"`
-	Source       *client.AppSource  `json:"source,omitempty"`
-	Deployment   *client.Deployment `json:"deployment,omitempty"`
+	BaseSourceID string            `json:"base_source_id,omitempty"`
+	Archive      *archiveSummary   `json:"archive,omitempty"`
+	Source       *client.AppSource `json:"source,omitempty"`
+	// ValidationRetries counts how often 'complete' was repeated because
+	// validation was refused for a reason on the platform's side.
+	ValidationRetries int                `json:"validation_retries,omitempty"`
+	Deployment        *client.Deployment `json:"deployment,omitempty"`
 	// Logs says how to fetch the logs of a deployment that failed.
 	Logs *logsHint `json:"logs,omitempty"`
 }
@@ -77,9 +80,32 @@ VALIDATION / INPUTS
   --org: required organization slug unless a default org is configured.
   --env-id: environment UUID; defaults to the production environment.
   --wait: wait for the deployment to reach a terminal state.
-  --wait-interval/--wait-timeout: Go duration strings. The interval also paces
-         the wait for archive validation, which always happens; the timeout
-         bounds each of the two waits separately.
+  --wait-interval/--wait-timeout: Go duration strings; the interval must be
+         positive. The interval also paces the wait for archive validation,
+         which always happens; the timeout
+         bounds each of the two waits separately. Validation retries (see
+         below) and their pauses count against the validation timeout.
+
+VALIDATION RETRIES
+  When validation refuses an archive for a reason on the platform's side (the
+  API marks the source retryable: storage, dispatch or a worker that did not
+  finish), the archive was never judged. The command then repeats 'complete',
+  pausing 2x, 4x and 8x --wait-interval (at most 1m), and fails with
+  validation_unavailable only when that did not help. A refusal about the
+  archive itself (retryable false) fails at once with source_rejected.
+  Against an API that does not report validation attempts the repeats stop
+  after 3. An API that limits them (each source gets 3 validation attempts, the
+  first 'complete' included, and a retry is accepted only some seconds after
+  the rejection) is followed instead: it reports attempts and max_attempts on
+  the source, and 'retryable' is true only while attempts remain. A retry sent
+  too early is refused with 409 source_retry_too_soon and retry_after_seconds;
+  the command waits that long (plus 1s) and sends 'complete' again, which does
+  not count as a repeat. If the wait does not fit in --wait-timeout it stops
+  with validation_timeout and says when a retry would have been possible. When
+  every attempt is used (409 source_retry_limit_reached, or a rejected source
+  with attempts >= max_attempts and a platform-side validation_code) it stops
+  at once with validation_unavailable: the platform failed, not the archive,
+  and uploading again starts a fresh set of attempts.
 
 WHAT IS PACKED
   Always left out, at any depth: node_modules/, .git/, .sureva/ and .env*. Also left out:
@@ -91,7 +117,9 @@ WHAT IS PACKED
 
 OUTPUT (stdout JSON)
   app_id, base_source_id, archive{size_bytes,files,max_bytes,packing,excluded,largest}, source
-  (the release; see 'sources get'), deployment and, when the deployment failed,
+  (the release; see 'sources get', including validation_code and retryable when
+  it was rejected), validation_retries (only when 'complete' was repeated),
+  deployment and, when the deployment failed,
   logs{command,...} naming the command that fetches its logs. base_source_id is
   present only when [dir] was filled by 'sources pull' for the same app: it is the
   release the tree was based on, read from .sureva/source.json; it is reported
@@ -104,20 +132,37 @@ ERRORS (stderr envelope "code"; exit code in parentheses)
   github_backed_app     (4) the app deploys from GitHub; use 'deploys trigger'.
   empty_archive         (4) nothing left to pack after the exclusions.
   archive_too_large     (4) over the API's limit; nothing was uploaded.
-  source_rejected       (4) validation refused the archive; the reason is in
-                        the message and in source.validation_error.
+  source_rejected       (4) validation refused the archive; fix the archive.
+                        The reason is in the message and in
+                        source.validation_error; details.validation_code is
+                        the stable cause and details.retryable is false.
+  validation_unavailable (1) validation could not run (a platform-side cause)
+                        and the retries did not help or the attempts are used
+                        up; run the command again (a new upload starts fresh
+                        attempts). details.validation_code names the cause;
+                        details.retryable is true when the CLI stopped repeating
+                        and false when the API has no attempts left, with
+                        details.attempts and details.max_attempts when it said.
+  app_source_upload_limit_exceeded (4) the app reached its daily upload limit.
   upload_failed         (1) the storage endpoint refused the archive.
   upload_expired        (1) the upload form expired; run the command again.
-  validation_timeout    (1) validation did not finish; check 'sources get'.
+  validation_timeout    (1) validation did not finish within --wait-timeout (retries
+                        and pauses included); check 'sources get'.
   source_expired        (1) the release is no longer stored.
-  source_not_ready      (1) the release is not deployable.
+  source_not_ready      (1) the release is not deployable; details.source_status
+                        and details.validation_code say why.
+  source_not_completable (1) the upload cannot be completed (it is not pending).
+  no_ready_source       (3) the deployment found no ready release.
   wait_timeout          (1) the deployment did not finish in time.
   deploy_failed         (1) the deployment failed or was cancelled.
   pack_failed           (1) the directory could not be read or zipped.
   interrupted           (1) stopped by SIGINT or SIGTERM; the temporary archive
                         was removed. Anything uploaded before that is reported
                         in stdout and stays on the platform.
-  network_error         (5) no HTTP response.`,
+  network_error         (5) no HTTP response.
+
+  The classification follows the API's own error code; the envelope also
+  carries it as details.api_code.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runDeploy,
 	}
@@ -148,9 +193,16 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		_ = r.RenderError(msg, code, -1)
 		return &ExitError{Code: exit}
 	}
+	failDetails := func(msg, code string, exit int, details map[string]any) error {
+		_ = r.RenderErrorDetails(msg, code, -1, details)
+		return &ExitError{Code: exit}
+	}
 
 	if appID == "" {
 		return fail("--app is required: the application ID of an upload-backed app (see 'apps list')", "validation_error", output.ExitValidation)
+	}
+	if waitInterval <= 0 {
+		return fail(waitIntervalMessage, "validation_error", output.ExitValidation)
 	}
 	dir := "."
 	if len(args) == 1 {
@@ -227,13 +279,17 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	upload, err := c.CreateSourceUpload(ctx, orgID, appID)
 	if err != nil {
 		var apiErr *client.APIError
-		if errors.As(err, &apiErr) && apiErr.HTTPStatus == http.StatusConflict && strings.Contains(apiErr.Message, "linked GitHub repository") {
-			return fail("this app deploys from its linked GitHub repository; use 'deploys trigger' instead of 'deploy'", "github_backed_app", output.ExitValidation)
+		// The create endpoint answers a GitHub-backed app with a plain 409 and
+		// no `code` (only the download endpoint sends app_not_upload_backed), so
+		// this one is still recognised by its message. REMOVABLE once the API
+		// gives that 409 a code.
+		if errors.As(err, &apiErr) && apiErr.ServerCode == "" && apiErr.HTTPStatus == http.StatusConflict && strings.Contains(apiErr.Message, "linked GitHub repository") {
+			return fail("this app deploys from its linked GitHub repository; use 'deploys trigger' instead of 'deploy'", codeGitHubBacked, output.ExitValidation)
 		}
 		if ctx.Err() != nil {
 			return interrupted()
 		}
-		return handleAPIError(r, err)
+		return handleAPIError(r, classifySourceError(err))
 	}
 	res.Archive.MaxBytes = upload.MaxBytes
 
@@ -259,35 +315,53 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return apiFail(classifySourceError(err))
 	}
 
-	var source *client.AppSource
-	pollErr := pollUntil(ctx, waitInterval, waitTimeout, func(ctx context.Context) (bool, error) {
-		s, gErr := c.GetSource(ctx, orgID, appID, upload.SourceID)
-		if gErr != nil {
-			return false, gErr
-		}
-		source = s
-		switch s.Status {
-		case "ready", "rejected", "expired":
-			return true, nil
-		}
-		return false, nil
-	})
+	source, retries, pollErr := awaitValidation(ctx, c, orgID, appID, upload.SourceID, waitInterval, waitTimeout)
 	if source != nil {
 		res.Source = source
 	}
+	res.ValidationRetries = retries
 	if pollErr != nil {
-		if errors.Is(pollErr, errWaitTimeout) {
-			return failWith(fmt.Sprintf("timed out waiting for validation of source %s; check with 'sources get %s %s --org <slug>', then deploy it with 'deploys trigger %s --source-id %s'", upload.SourceID, appID, upload.SourceID, appID, upload.SourceID), "validation_timeout", output.ExitGeneral)
+		var (
+			gaveUp  *validationUnavailableError
+			tooLate *retryTooLateError
+		)
+		checkHint := fmt.Sprintf("check with 'sources get %s %s --org <slug>', then deploy it with 'deploys trigger %s --source-id %s'", appID, upload.SourceID, appID, upload.SourceID)
+		switch {
+		case errors.Is(pollErr, errWaitTimeout):
+			return failWith(fmt.Sprintf("timed out waiting for validation of source %s; %s", upload.SourceID, checkHint), "validation_timeout", output.ExitGeneral)
+		case errors.As(pollErr, &tooLate):
+			when := time.Now().Add(tooLate.after).UTC().Format(time.RFC3339)
+			return failWith(fmt.Sprintf("timed out waiting for validation of source %s: the platform failed to validate it and accepts a retry only in %d seconds (at %s), after the --wait-timeout ends; %s", upload.SourceID, int(tooLate.after.Seconds()), when, checkHint), "validation_timeout", output.ExitGeneral)
+		case errors.As(pollErr, &gaveUp):
+			// The row read before the refused retry still says retryable.
+			if fresh, gErr := c.GetSource(ctx, orgID, appID, upload.SourceID); gErr == nil {
+				source, res.Source = fresh, fresh
+			}
+			_ = r.Render(res)
+			details := rejectionDetails(source)
+			details["retryable"] = false
+			details["api_code"] = apiCodeRetryLimit
+			if gaveUp.attempts > 0 {
+				details["attempts"] = gaveUp.attempts
+			}
+			if gaveUp.maxAttempts > 0 {
+				details["max_attempts"] = gaveUp.maxAttempts
+			}
+			return failDetails(unavailableMessage(attemptsUsed(source, gaveUp.attempts, retries), rejectionReason(source)), "validation_unavailable", output.ExitGeneral, details)
 		}
-		return apiFail(pollErr)
+		return apiFail(classifySourceError(pollErr))
 	}
 	switch source.Status {
 	case "rejected":
-		reason := "no reason was given"
-		if source.ValidationError != nil && *source.ValidationError != "" {
-			reason = *source.ValidationError
+		_ = r.Render(res)
+		details := rejectionDetails(source)
+		// Retries are over, either because the CLI stopped repeating a
+		// retryable rejection or because the API says it used every attempt on
+		// a cause that was not the archive's. Neither is a verdict on the archive.
+		if source.IsRetryable() || platformGaveUp(source) {
+			return failDetails(unavailableMessage(attemptsUsed(source, 0, retries), rejectionReason(source)), "validation_unavailable", output.ExitGeneral, details)
 		}
-		return failWith("the archive was rejected by validation: "+reason, "source_rejected", output.ExitValidation)
+		return failDetails("the archive was rejected by validation: "+rejectionReason(source), "source_rejected", output.ExitValidation, details)
 	case "expired":
 		return failWith(fmt.Sprintf("source %s expired before it could be deployed; run the command again", source.ID), "source_expired", output.ExitGeneral)
 	}
@@ -337,6 +411,33 @@ func pulledBase(dir, appID string) string {
 		return b.SourceID
 	}
 	return ""
+}
+
+// rejectionReason is why validation refused a source, in the API's words.
+func rejectionReason(s *client.AppSource) string {
+	if s != nil && s.ValidationError != nil && *s.ValidationError != "" {
+		return *s.ValidationError
+	}
+	return "no reason was given"
+}
+
+// attemptsUsed is how many validation attempts a source used: the count of the
+// API error that refused a retry, else what the source row reports, else what
+// this run sent (the first complete and its repeats).
+func attemptsUsed(s *client.AppSource, fromError, retries int) int {
+	switch {
+	case fromError > 0:
+		return fromError
+	case s != nil && s.Attempts != nil && *s.Attempts > 0:
+		return *s.Attempts
+	}
+	return retries + 1
+}
+
+// unavailableMessage is the validation_unavailable message: the platform, not
+// the archive, failed, and what to do about it.
+func unavailableMessage(attempts int, reason string) string {
+	return fmt.Sprintf("the platform could not validate the archive after %d attempts, so it was never judged: %s Run the command again: uploading anew starts a fresh budget of validation attempts. If it keeps happening, contact support", attempts, reason)
 }
 
 func tooLargeMessage(a *pack.Archive, max int64) string {
