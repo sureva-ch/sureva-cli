@@ -317,7 +317,11 @@ Each row carries `status` (`pending` | `validating` | `rejected` | `ready` |
 reworded), `validation_code` (the stable cause, for example `credentials_found`
 or `promote_failed`) and `retryable`. `retryable: true` means the platform
 failed and sending the same archive again can succeed; `false` means the archive
-has to change. A row rejected before the API recorded codes has neither.
+has to change. A row rejected before the API recorded codes has neither. An API
+that limits validation attempts also reports `attempts` and `max_attempts`, and
+then `retryable` is true only while attempts remain. A GitHub-backed app has no
+releases: `sources list` is empty (only `sources pull` reports
+`github_backed_app` for it).
 `available: false` on a `ready` release means its stored version is gone and it
 can no longer be deployed.
 
@@ -420,13 +424,25 @@ A GitHub-backed app is refused up front (`github_backed_app`): use
 
 **Validation that could not run is retried.** When the API reports a rejection
 as `retryable` (storage, dispatch or a worker that did not finish: the archive
-was never judged), `deploy` repeats the `complete` call up to 3 times, pausing
-2x, 4x and 8x `--wait-interval` (at most one minute), because the API restarts
-validation of such a source. Retries and pauses count against the validation
-`--wait-timeout`; the output reports `validation_retries`. If that does not help
-the command fails with `validation_unavailable` (run it again later). A refusal
-about the archive itself (`retryable: false`, for example `credentials_found`) fails at
-once with `source_rejected`.
+was never judged), `deploy` repeats the `complete` call, pausing 2x, 4x and 8x
+`--wait-interval` (at most one minute), because the API restarts validation of
+such a source. Against an API that does not report validation attempts it
+repeats up to 3 times. An API that limits them is followed instead: each source
+gets 3 validation attempts (the first `complete` included), the source reports
+`attempts` and `max_attempts`, and `retryable` is true only while attempts
+remain. A retry sent too early is refused with `409 source_retry_too_soon` and
+`retry_after_seconds`; `deploy` waits that long (plus one second) and sends
+`complete` again, which does not count as a repeat. If that wait does not fit in
+`--wait-timeout` the command stops with `validation_timeout` and says when a
+retry would have been possible. Retries and pauses count against the validation
+`--wait-timeout`; the output reports `validation_retries`. When the repeats did
+not help, or every attempt is used (`409 source_retry_limit_reached`, or a
+rejected source with `attempts >= max_attempts` and a platform-side
+`validation_code`), the command fails with `validation_unavailable`: the platform
+failed, not the archive, and running `deploy` again uploads anew and starts a
+fresh set of attempts. A refusal about the archive itself (`retryable: false`,
+for example `credentials_found`) fails at once with `source_rejected`, also when
+its attempts are used up. `--wait-interval` must be positive.
 
 What is packed: `node_modules/`, `.git/`, `.sureva/` and `.env*` are always left
 out, at any depth. So is everything `.gitignore` ignores (inside a git work tree the file
@@ -454,16 +470,37 @@ the envelope `code`:
 | `empty_archive` | 4 | nothing left to pack after the exclusions |
 | `github_backed_app` | 4 | the app deploys from GitHub |
 | `app_source_upload_limit_exceeded` | 4 | the app reached its daily upload limit; try again tomorrow (UTC) |
-| `validation_unavailable` | 1 | validation could not run (a platform-side cause, `details.retryable: true`) and the retries did not help; run the command again later |
+| `validation_unavailable` | 1 | validation could not run (a platform-side cause; `details.validation_code` names it) and the retries did not help or the API has no attempts left (`details.retryable`, `details.attempts`, `details.max_attempts`); run the command again, which starts a fresh set of attempts |
 | `source_not_completable` | 1 | the upload cannot be completed again (`details.source_status` says why) |
 | `source_expired` / `source_not_ready` | 1 | the release is no longer stored / not deployable (`details.source_status`, `details.validation_code`) |
 | `no_ready_source` | 3 | the deployment found no ready release |
-| `validation_timeout` | 1 | validation did not finish; see `sources get` |
+| `validation_timeout` | 1 | validation did not finish within `--wait-timeout`, retries and pauses included, or the next retry would only be accepted after it; see `sources get` |
 | `pack_failed` | 1 | the directory could not be read or zipped |
 | `interrupted` | 1 | stopped by SIGINT or SIGTERM; the temporary archive was removed |
 | `upload_failed` / `upload_expired` | 1 | the storage endpoint refused the archive / the upload form expired |
 | `wait_timeout` | 1 | the deployment did not finish in time |
 | `deploy_failed` | 1 | the deployment failed or was cancelled |
+
+Changed since v0.2.0 (scripts that matched these `code` or exit values need
+updating; the same list is in the CHANGELOG):
+
+- `deploys trigger` with no ready release: `not_found` is now `no_ready_source`
+  (exit 3, unchanged).
+- Daily upload limit: `validation_error` is now `app_source_upload_limit_exceeded`
+  (exit 4, unchanged).
+- `complete` refused with 409: `api_error` is now `source_not_completable` (exit 1,
+  unchanged).
+- A platform-side validation failure (`promote_failed`, `dispatch_failed`,
+  `validation_timeout`, ...): `source_rejected` (exit 4) is now
+  `validation_unavailable` (exit 1), after the retries.
+- A 409 that carries an API `code` other than a source one is no longer reported
+  as `source_not_ready` because of its wording.
+- `--wait-timeout` now bounds the whole validation phase, including the retries
+  and their pauses.
+- The error envelope may carry a `details` object (additive).
+- A `--wait-interval` that is not positive is now a `validation_error` (exit 4)
+  in `deploy`, `deploys trigger --wait` and `apps create --wait`; it used to
+  panic.
 
 ### Deployments
 
@@ -502,7 +539,7 @@ envelope:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--wait` | false | Block until terminal state |
-| `--wait-interval` | 5s | Polling interval |
+| `--wait-interval` | 5s | Polling interval; must be positive (`validation_error`, exit 4, otherwise) |
 | `--wait-timeout` | 10m (create) / 15m (deploys) | Max wait time |
 
 Timeout exits 1 with `code: "wait_timeout"`. Non-success terminal exits 1 with `code: "domain_failed"` or `"deploy_failed"`.

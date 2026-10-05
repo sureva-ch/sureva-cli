@@ -255,3 +255,87 @@ func TestAPIError_KeepsCodeAndDetailFields(t *testing.T) {
 		}
 	}
 }
+
+// The bodies are the ones cloud-api writes for a refused retry
+// (handlers/app_source_validation.go retryRefusal and refuseCompletion): flat
+// fields next to error and code.
+func TestAPIError_KeepsRetryRefusalFields(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body                    string
+		code                          string
+		retryAfter, attempts, maximum int
+	}{
+		{"too soon", `{"error":"this source was decided too recently to be retried; try again in 20 seconds","code":"source_retry_too_soon","source_status":"rejected","retry_after_seconds":20}`,
+			"source_retry_too_soon", 20, 0, 0},
+		{"limit reached", `{"error":"this source has used all 3 of its validation attempts and cannot be retried; request a new upload","code":"source_retry_limit_reached","source_status":"rejected","attempts":3,"max_attempts":3}`,
+			"source_retry_limit_reached", 0, 3, 3},
+		{"a negative count is not trusted", `{"error":"x","code":"source_retry_too_soon","retry_after_seconds":-5}`, "source_retry_too_soon", 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			_, err := c.CompleteSource(context.Background(), "org-1", "app-1", "s1")
+			var apiErr *client.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("err = %v, want *APIError", err)
+			}
+			if apiErr.ServerCode != tc.code || apiErr.RetryAfterSeconds != tc.retryAfter ||
+				apiErr.Attempts != tc.attempts || apiErr.MaxAttempts != tc.maximum || apiErr.HTTPStatus != 409 {
+				t.Errorf("err = %+v", apiErr)
+			}
+		})
+	}
+}
+
+// A row carries attempts and max_attempts on an API that limits validation
+// attempts; a row without them reports no limit.
+func TestAppSource_AttemptCounters(t *testing.T) {
+	t.Parallel()
+	c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"s1","app_id":"app-1","seq":4,"status":"rejected","validation_code":"promote_failed",` +
+			`"created_at":"2026-10-02T10:00:00Z","updated_at":"2026-10-02T10:00:00Z","attempts":3,"max_attempts":3,"retryable":false}`))
+	})
+	got, err := c.GetSource(context.Background(), "org-1", "app-1", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasAttemptLimit() || !got.AttemptsExhausted() || got.IsRetryable() {
+		t.Errorf("source = %+v", got)
+	}
+	out, _ := json.Marshal(got)
+	if !strings.Contains(string(out), `"attempts":3`) || !strings.Contains(string(out), `"max_attempts":3`) {
+		t.Errorf("counters missing from the JSON output: %s", out)
+	}
+
+	two, three := 2, 3
+	for _, tc := range []struct {
+		name           string
+		s              *client.AppSource
+		limit, spentUp bool
+	}{
+		{"nil", nil, false, false},
+		{"no counters (older API)", &client.AppSource{Status: "rejected"}, false, false},
+		{"attempts left", &client.AppSource{Attempts: &two, MaxAttempts: &three}, true, false},
+		{"all used", &client.AppSource{Attempts: &three, MaxAttempts: &three}, true, true},
+	} {
+		if tc.s.HasAttemptLimit() != tc.limit || tc.s.AttemptsExhausted() != tc.spentUp {
+			t.Errorf("%s: limit=%v exhausted=%v", tc.name, tc.s.HasAttemptLimit(), tc.s.AttemptsExhausted())
+		}
+	}
+	if old := (&client.AppSource{ID: "x"}); strings.Contains(mustJSON(t, old), "attempts") {
+		t.Errorf("a row without counters must not print them: %s", mustJSON(t, old))
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

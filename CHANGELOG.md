@@ -25,12 +25,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `sources get|list` and the `source` object of `deploy` show `validation_code`,
   `retryable` and `base_source_id`. A rejected `deploy` carries
   `details.validation_code` and `details.retryable` in its envelope.
-- `deploy` repeats `complete` up to 3 times, with growing pauses derived from
+- `deploy` repeats `complete`, with growing pauses derived from
   `--wait-interval`, when validation is rejected as `retryable`, within
-  `--wait-timeout`; the output reports `validation_retries`.
+  `--wait-timeout`; the output reports `validation_retries`. It repeats up to 3
+  times against an API that reports no validation attempts. Against one that
+  does (`attempts` and `max_attempts` on the source, `retryable` true only while
+  attempts remain) it follows the API: a retry refused with `409
+  source_retry_too_soon` is waited out (`retry_after_seconds` plus 1s, not
+  counted as a repeat) and, when that does not fit in `--wait-timeout`, ends with
+  `validation_timeout` and the time a retry would have been possible; `409
+  source_retry_limit_reached`, or a rejected source with every attempt used on a
+  platform-side `validation_code`, ends at once with `validation_unavailable`
+  and a message that uploading again starts a fresh set of attempts. The two
+  refusals have their own envelope codes (`source_retry_too_soon`,
+  `source_retry_limit_reached`) where `deploy` reports them as they are, and
+  `details` carries `retry_after_seconds`, `attempts` and `max_attempts`.
+- `sources get|list` and the `source` object of `deploy` show `attempts` and
+  `max_attempts` when the API sends them.
 
 ### Changed
 
+Changes to behavior of v0.2.0 that a script may depend on:
+
+- `deploys trigger` with no ready release: envelope `code` `not_found` is now
+  `no_ready_source` (exit 3, unchanged).
+- Daily upload limit on `deploy`: `validation_error` is now
+  `app_source_upload_limit_exceeded` (exit 4, unchanged).
+- `complete` refused with 409 in `deploy`: `api_error` is now
+  `source_not_completable` (exit 1, unchanged).
+- A platform-side validation failure (`promote_failed`, `dispatch_failed`,
+  `validation_timeout`, ...) in `deploy`: `source_rejected` (exit 4) is now
+  `validation_unavailable` (exit 1), after the retries. `source_rejected` is left
+  for a refusal about the archive.
+- A 409 that carries an API `code` other than a source one is no longer reported
+  as `source_not_ready` because of its wording.
+- `--wait-timeout` of `deploy` now bounds the whole validation phase, including
+  the retries and their pauses.
+- The error envelope may carry a `details` object (existing keys unchanged).
+- A `--wait-interval` that is zero or negative is now refused up front with
+  `validation_error` (exit 4) in `deploy`, `deploys trigger --wait` and
+  `apps create --wait`; it used to panic the polling ticker.
+- `sources list` and `sources get` no longer document `github_backed_app`: the API
+  never answers it there (only the download behind `sources pull` does). A
+  GitHub-backed app has an empty list and `get` answers `not_found`.
+- What `details` echoes from an API response is bounded (128 characters per
+  string, 20 environments) and the size of an API error body that is read is
+  limited to 1 MiB.
 - The message-based recognition of `source_expired` and `source_not_ready`
   remains only as a fallback for a response that carries no `code` (the API's
   download endpoint sends none for them yet). A 409 with another API code no

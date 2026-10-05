@@ -95,6 +95,11 @@ follows the API's own error code, which is repeated in details.api_code.
 				return &ExitError{Code: output.ExitValidation}
 			}
 
+			if wait && waitInterval <= 0 {
+				r.RenderError(waitIntervalMessage, "validation_error", -1)
+				return &ExitError{Code: output.ExitValidation}
+			}
+
 			orgID, err := requireOrgID(cmd.Context(), cmd, c, r)
 			if err != nil {
 				return err

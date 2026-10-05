@@ -748,3 +748,16 @@ func TestApps_SourceType_Shown(t *testing.T) {
 		}
 	})
 }
+
+func TestAppsCreate_RejectsANonPositiveWaitInterval(t *testing.T) {
+	mux := appsCreateMux("acme", "org-1", "[]")
+	mux.HandleFunc("/v1/orgs/org-1/apps", func(http.ResponseWriter, *http.Request) {
+		t.Error("nothing may be created")
+	})
+	_, errBuf, exec := newTestRoot(t, newTestServer(t, mux))
+
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
+		"--wait", "--wait-interval", "0")
+
+	assertEnvelope(t, errBuf, exitCode(err), output.ExitValidation, "validation_error", nil)
+}

@@ -27,6 +27,11 @@ const (
 	deploySrcID   = "src-new"
 )
 
+type fakeReply struct {
+	code int
+	body string
+}
+
 // deployFake is an API plus an S3 form endpoint, both local.
 type deployFake struct {
 	t   *testing.T
@@ -43,6 +48,13 @@ type deployFake struct {
 	// API adds to a rejected source; empty/nil means an API that sends neither.
 	rejectCode      string
 	rejectRetryable *bool
+	// completeScript answers the complete calls after the first, in order; once
+	// it is used up they answer 202 again. completeHook runs after each of them
+	// was answered, with the call's number (the first is 1).
+	completeScript []fakeReply
+	completeHook   func(n int)
+	// rowHook may add fields to the source row GET source answers with.
+	rowHook func(row map[string]any, status string)
 	// repeatCompleteCode/Body, when set, answer every complete call after the first.
 	repeatCompleteCode int
 	repeatCompleteBody string
@@ -99,6 +111,14 @@ func newDeployFake(t *testing.T) *deployFake {
 		f.completed++
 		n := f.completed
 		f.mu.Unlock()
+		if n > 1 && f.completeHook != nil {
+			defer f.completeHook(n)
+		}
+		if n > 1 && n-2 < len(f.completeScript) {
+			w.WriteHeader(f.completeScript[n-2].code)
+			_, _ = w.Write([]byte(f.completeScript[n-2].body))
+			return
+		}
 		if n > 1 && f.repeatCompleteCode != 0 {
 			w.WriteHeader(f.repeatCompleteCode)
 			_, _ = w.Write([]byte(f.repeatCompleteBody))
@@ -121,6 +141,9 @@ func newDeployFake(t *testing.T) *deployFake {
 			if f.rejectRetryable != nil {
 				body["retryable"] = *f.rejectRetryable
 			}
+		}
+		if f.rowHook != nil {
+			f.rowHook(body, status)
 		}
 		_ = json.NewEncoder(w).Encode(body)
 	})

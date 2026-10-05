@@ -20,7 +20,40 @@ const (
 	apiCodeSourceNotCompletable = "source_not_completable"           // 409, complete: carries source_status
 	apiCodeAppNotUploadBacked   = "app_not_upload_backed"            // 422, download of a GitHub-backed app
 	apiCodeUploadLimit          = "app_source_upload_limit_exceeded" // 422, create upload: daily limit
+	apiCodeRetryTooSoon         = "source_retry_too_soon"            // 409, complete: carries retry_after_seconds
+	apiCodeRetryLimit           = "source_retry_limit_reached"       // 409, complete: carries attempts, max_attempts
 )
+
+// platformValidationCodes are the validation_code values of a rejection whose
+// cause was the platform's and not the archive's: the archive was never judged
+// (cloud-api models.SourceValidationCode.Retryable). A source rejected for one
+// of them with every attempt used is the platform failing, not the archive.
+// A code that is not listed, including one this CLI does not know yet, is
+// treated as being about the archive.
+var platformValidationCodes = map[string]bool{
+	"upload_unreadable":      true,
+	"promote_failed":         true,
+	"validation_unavailable": true,
+	"dispatch_failed":        true,
+	"validation_timeout":     true,
+}
+
+// Bounds on what is copied from an API response into the error envelope.
+const (
+	maxDetailString = 128
+	maxDetailItems  = 20
+)
+
+// capString cuts s to at most maxDetailString characters.
+func capString(s string) string {
+	if len(s) <= maxDetailString {
+		return s
+	}
+	if r := []rune(s); len(r) > maxDetailString {
+		return string(r[:maxDetailString])
+	}
+	return s
+}
 
 // Envelope codes the CLI gives those failures. Most keep the name of the API
 // code; the exceptions are noted where they are assigned.
@@ -32,24 +65,40 @@ const (
 	codeUploadLimit          = "app_source_upload_limit_exceeded"
 	codeGitHubBacked         = "github_backed_app"
 	codeNotFound             = "not_found"
+	codeRetryTooSoon         = "source_retry_too_soon"
+	codeRetryLimit           = "source_retry_limit_reached"
 )
 
 // apiErrorDetails is what an *client.APIError adds to the stderr envelope as
 // "details": the API's own code (so an agent still sees a code this CLI does not
-// know yet) and the fields that came with it. nil when there is nothing.
+// know yet) and the fields that came with it. nil when there is nothing. What
+// the server sent is echoed, so strings and lists are capped.
 func apiErrorDetails(e *client.APIError) map[string]any {
 	d := map[string]any{}
 	if e.ServerCode != "" {
-		d["api_code"] = e.ServerCode
+		d["api_code"] = capString(e.ServerCode)
 	}
 	if e.SourceStatus != "" {
-		d["source_status"] = e.SourceStatus
+		d["source_status"] = capString(e.SourceStatus)
 	}
 	if e.ValidationCode != "" {
-		d["validation_code"] = e.ValidationCode
+		d["validation_code"] = capString(e.ValidationCode)
 	}
 	if len(e.Environments) > 0 {
-		d["environments"] = e.Environments
+		envs := make([]string, 0, min(len(e.Environments), maxDetailItems))
+		for _, env := range e.Environments[:min(len(e.Environments), maxDetailItems)] {
+			envs = append(envs, capString(env))
+		}
+		d["environments"] = envs
+	}
+	if e.RetryAfterSeconds > 0 {
+		d["retry_after_seconds"] = e.RetryAfterSeconds
+	}
+	if e.Attempts > 0 {
+		d["attempts"] = e.Attempts
+	}
+	if e.MaxAttempts > 0 {
+		d["max_attempts"] = e.MaxAttempts
 	}
 	if len(d) == 0 {
 		return nil
@@ -91,6 +140,10 @@ func classifySourceError(err error) error {
 		apiErr.Code = codeGitHubBacked
 	case apiCodeUploadLimit:
 		apiErr.Code = codeUploadLimit
+	case apiCodeRetryTooSoon:
+		apiErr.Code = codeRetryTooSoon
+	case apiCodeRetryLimit:
+		apiErr.Code = codeRetryLimit
 	}
 	return apiErr
 }

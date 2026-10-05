@@ -11,6 +11,10 @@ import (
 // errors via errors.Is(err, errWaitTimeout).
 var errWaitTimeout = errors.New("wait timeout")
 
+// waitIntervalMessage is the validation_error of a --wait-interval that is not
+// positive: a polling ticker cannot run on it.
+const waitIntervalMessage = "--wait-interval must be a positive duration (for example 5s)"
+
 // pollUntil calls fn repeatedly at the given interval until fn returns done=true,
 // fn returns a non-nil error, the context is cancelled, or timeout elapses.
 //
