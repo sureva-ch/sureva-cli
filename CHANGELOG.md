@@ -12,18 +12,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   straight from storage, with a client that never carries the API token, verifies
   the `sha256` the API reported and extracts it with a hardened extractor
   (no absolute paths, `..`, backslashes, symlinks or non-regular entries; entry
-  and size limits; nothing written through a symlink in the target; only
-  permission bits applied). A new or empty directory is built aside and moved
+  and size limits; names that collide when compared case-insensitively, a file
+  and a path beneath it, and names Windows cannot hold (trailing dot or space,
+  control characters, `:`, `<>"|?*`, reserved device names) are refused on every
+  platform; nothing written through a symlink in the target; only permission
+  bits applied). A new or empty directory is built aside and moved
   into place; a populated one needs `--force`, which leaves files that are not in
-  the archive alone. It writes `.sureva/source.json` with the release the tree
-  is based on. Distinct envelope codes: `no_source`, `source_expired`,
+  the archive alone and checks every path against what exists before writing
+  (a file-versus-directory conflict is refused up front, nothing is removed). It
+  writes `.sureva/source.json` with the release the tree is based on, atomically
+  and never through a symlink (refused as `validation_error` before anything is
+  downloaded or extracted); in an empty target only that file is replaced. Stale
+  `.sureva-pull-*` staging directories of a killed pull are removed by the next
+  pull. A redirect from https to http on the storage download is refused. Distinct envelope codes: `no_source`, `source_expired`,
   `source_not_ready`, `github_backed_app`, `checksum_mismatch`, `unsafe_archive`,
   `dir_not_empty`, `download_expired`, `download_failed`, `extract_failed`,
   `interrupted`. The help and README say that dependencies and environment
   variables are not in the tree and that a wrapper directory was removed.
 - `sureva deploy` reports `base_source_id` in its JSON output when the directory
-  was pulled for the same app. It is not sent to the API. `.sureva/` is now
-  always left out of the archive, like `.git/`, whatever its letter case.
+  was pulled for the same app. It is not sent to the API. It reads
+  `.sureva/source.json` only when it is a small regular file. `.sureva/` and
+  `.sureva-pull-*` are now always left out of the archive, like `.git/`,
+  whatever their letter case.
 - `sureva deploy [dir] --app <app-id>` packs a directory, uploads it to an
   upload-backed app, waits for the archive to be validated and deploys the
   release, with `--org`, `--env-id` and `--wait` / `--wait-interval` /

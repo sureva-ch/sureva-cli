@@ -321,17 +321,26 @@ sureva sources pull <app-id> --org <slug> --dir ./app --source-id <id>   # a spe
 The API hands out a short-lived download link; the archive is fetched straight
 from storage with a client that never carries your API token, its `sha256` is
 checked against the one the API reported, and only then is anything extracted.
-`--dir` defaults to the current directory and is created when missing. It must
-be empty (nothing in it, or only the `.sureva/` directory of an earlier pull)
+`--dir` defaults to the current directory and is created when missing; a
+`--dir` that is a symlink is resolved and the files are written under the
+resolved path. It must be empty (nothing in it, or only the `.sureva/` directory of an earlier pull)
 unless you pass `--force`; with `--force` files in the archive overwrite files
 of the same path and files that are not in the archive are left alone, so the
 directory can keep leftovers from an older release. Into a new or empty
-directory the tree is built aside and moved into place only when complete.
+directory the tree is built aside and moved into place only when complete
+(leftover `.sureva-pull-*` staging directories of a killed pull are removed).
+With `--force`, every path is checked against what exists before anything is
+written: a directory where the archive has a file, or the reverse, is refused
+and names the path; nothing is removed to make room.
 
 Extraction does not trust the archive: absolute paths, `..` or `.` segments,
 backslashes, NUL bytes, drive letters, symlinks and every other non-regular
 entry are refused (nothing is extracted), as are archives over 50,000 entries or
-1 GiB uncompressed. No file is written through a symlink already in `--dir`.
+1 GiB uncompressed. Names that differ only in letter case, a file together with
+a path beneath it, and names Windows cannot hold (a trailing dot or space,
+control characters, `:`, any of `<>"|?*`, device names such as `CON`, `NUL`,
+`COM1`, `LPT1`) are refused on every platform, so one archive behaves the same
+everywhere. No file is written through a symlink already in `--dir`.
 Only permission bits are applied, never setuid, setgid or sticky, and group and
 other never get write access.
 
@@ -348,7 +357,11 @@ what was uploaded:
 
 A successful pull writes `<dir>/.sureva/source.json` (`app_id`, `source_id`,
 `release_tag`, `sha256`, `pulled_at`): the release the tree is based on.
-`deploy` never uploads `.sureva/`, and reports the recorded release as
+The record is written atomically and never through a symlink: if `.sureva` is
+not a plain directory, or `source.json` is not a regular file, the pull is
+refused before anything is downloaded. In an empty `--dir` only `source.json`
+is replaced; the rest of an existing `.sureva/` stays. `deploy` never uploads
+`.sureva/`, and reports the recorded release as
 `base_source_id` in its JSON output. It is not sent to the API.
 
 stdout is one JSON object: `app_id`, `source_id`, `release_tag`, `dir`, `files`,
@@ -363,7 +376,7 @@ link is never printed. Failures an agent should tell apart, by the envelope
 | `not_found` | 3 | unknown app or unknown `--source-id` |
 | `dir_not_empty` | 4 | `--dir` already holds files; use `--force` |
 | `github_backed_app` | 4 | the app's code is its GitHub repository: clone it (named in the message when known) |
-| `validation_error` | 4 | bad arguments, or `--dir` is not a directory |
+| `validation_error` | 4 | bad arguments; `--dir` is not a directory; or, with `--force`, a path conflicts with what exists (file versus directory) or `.sureva` is a link; nothing was written |
 | `source_not_ready` | 1 | the release is not ready (validating or rejected) |
 | `source_expired` | 1 | the release is no longer stored |
 | `checksum_mismatch` | 1 | the download does not match the reported `sha256`; nothing was extracted |

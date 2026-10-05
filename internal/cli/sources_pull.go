@@ -55,13 +55,20 @@ VALIDATION / INPUTS
   <app-id>: application ID of an upload-backed app (see 'apps list').
   --source-id: release to pull (see 'sources list'); default: the latest ready one.
   --dir: directory to extract into; default: the current directory. It is created
-         when missing. It counts as empty when it holds nothing, or only the
-         .sureva state directory of an earlier pull; otherwise the command is
-         refused (dir_not_empty) unless --force.
+         when missing. A --dir that is a symlink is resolved and the files are
+         written under the resolved path (the output "dir" is the absolute path as given).
+         It counts as empty when it holds nothing, or only the .sureva state
+         directory of an earlier pull (and leftover .sureva-pull-* staging
+         directories of a killed pull, which are removed); otherwise the command
+         is refused (dir_not_empty) unless --force.
   --force: extract into a directory that already holds files. Files in the
          archive overwrite files of the same path; files that are not in the
          archive are left alone, so a directory can end up with leftovers from
-         an older release. A failure midway can leave some files written.
+         an older release. Before anything is written, every path is checked
+         against what exists: a directory where the archive has a file (or the
+         reverse) is refused (validation_error) naming the path, and nothing is
+         removed to make room. A failure writing midway can still leave some
+         files written.
   --org: required organization slug unless a default org is configured.
 
 WHAT YOU GET (read this before building)
@@ -81,7 +88,11 @@ SAFETY
   The archive is refused, and nothing is extracted from it, when an entry has an
   absolute path, a ".." or "." segment, a backslash, a NUL byte or a drive letter,
   is a symlink or any non-regular entry, repeats another entry, or uses the
-  reserved .sureva directory. Limits: 50000 entries and 1 GiB uncompressed (the
+  reserved .sureva directory. Names that differ only in letter case, or a file
+  and a path beneath it, are refused too, on every platform. So are names that
+  Windows cannot hold: a trailing dot or space, a control character, ":", any of
+  <>"|?*, or a reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or
+  without an extension). Limits: 50000 entries and 1 GiB uncompressed (the
   platform itself accepts at most 10000 entries and 100 MB). No file is written
   through a symlink that already exists in --dir. Into a new or empty directory
   the tree is built aside and moved into place only when complete.
@@ -89,10 +100,17 @@ SAFETY
 OUTPUT (stdout JSON)
   app_id, source_id, release_tag, dir, files, bytes, archive_bytes, sha256,
   state_file. The download link is never printed.
+  The state file is never written through a link: if .sureva is not a plain
+  directory, or .sureva/source.json exists and is not a regular file, the
+  command is refused (validation_error) before anything is downloaded or
+  extracted. In an empty target only source.json is replaced; the rest of an
+  existing .sureva directory is left alone.
 
 ERRORS (stderr envelope "code"; exit code in parentheses)
   auth_error          (2) missing or expired credentials.
-  validation_error    (4) bad arguments, or --dir is not a directory.
+  validation_error    (4) bad arguments; --dir is not a directory; with --force, an
+                      existing path conflicts with the archive (file versus
+                      directory) or .sureva is a link. Nothing was written.
   dir_not_empty       (4) --dir already holds files; use --force.
   github_backed_app   (4) the app's code is its GitHub repository; clone it
                       (the repository is named in the message when known).
@@ -286,6 +304,8 @@ func pullDownloadFailure(r *output.Renderer, fail func(string, string, int) erro
 func pullExtractFailure(ctx context.Context, fail func(string, string, int) error, err error) error {
 	var notEmpty *unpack.NotEmptyError
 	var unsafe *unpack.UnsafeArchiveError
+	var conflict *unpack.ConflictError
+	var state *sourcebase.StateError
 	switch {
 	case ctx.Err() != nil:
 		return fail("interrupted before the pull finished; the temporary archive was removed", "interrupted", output.ExitGeneral)
@@ -293,6 +313,10 @@ func pullExtractFailure(ctx context.Context, fail func(string, string, int) erro
 		return fail(notEmpty.Error(), "dir_not_empty", output.ExitValidation)
 	case errors.Is(err, unpack.ErrNotDir):
 		return fail("--dir exists and is not a directory", "validation_error", output.ExitValidation)
+	case errors.As(err, &conflict), errors.As(err, &state):
+		// The target cannot take the tree; the archive is not at fault. Nothing
+		// was written.
+		return fail(err.Error(), "validation_error", output.ExitValidation)
 	case errors.As(err, &unsafe):
 		return fail(unsafe.Error(), "unsafe_archive", output.ExitGeneral)
 	}

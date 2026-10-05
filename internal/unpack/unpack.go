@@ -28,6 +28,10 @@ const (
 	DefaultMaxBytes int64 = 1 << 30
 )
 
+// stagingPrefix starts the name of the hidden directory an extraction builds a
+// tree in. One left behind by a killed pull is removed by the next pull.
+const stagingPrefix = ".sureva-pull-"
+
 // Limits caps what one extraction may produce. A zero field takes its default.
 type Limits struct {
 	MaxEntries int
@@ -73,6 +77,19 @@ type NotEmptyError struct{ Dir string }
 
 func (e *NotEmptyError) Error() string {
 	return fmt.Sprintf("%s is not empty; use --force to extract into it anyway", e.Dir)
+}
+
+// ConflictError means an archive entry cannot be placed because of what already
+// exists in the target: a directory where the archive has a file, or a file
+// where it needs a directory. It is found before anything is written and no
+// user content is removed to make room.
+type ConflictError struct {
+	Path   string
+	Reason string
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("cannot extract: %s %s", e.Path, e.Reason)
 }
 
 // PartialError means extraction failed after some files were already placed in
@@ -129,21 +146,61 @@ func inspect(dir string) (root string, st targetState, err error) {
 		if e.Name() == sourcebase.Dir && e.IsDir() {
 			continue
 		}
+		if isStaging(e) {
+			continue
+		}
 		return root, targetPopulated, nil
 	}
 	return root, targetEmpty, nil
 }
 
+// isStaging reports whether e is a real directory named like the ones
+// MkdirTemp makes for stagingPrefix. A symlink never matches.
+func isStaging(e fs.DirEntry) bool {
+	suffix, ok := strings.CutPrefix(e.Name(), stagingPrefix)
+	if !ok || suffix == "" || !e.IsDir() {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// removeStaleStaging deletes staging directories an interrupted pull left in
+// root. Only exact matches that are real directories are touched; RemoveAll
+// does not follow links.
+func removeStaleStaging(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if isStaging(e) {
+			if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Preflight reports whether dir can be extracted into: a *NotEmptyError when it
-// holds files and force is false, ErrNotDir when it is a file. It lets a caller
-// refuse before downloading anything.
+// holds files and force is false, ErrNotDir when it is a file, a
+// *sourcebase.StateError when the state directory or record is a link. It lets
+// a caller refuse before downloading anything.
 func Preflight(dir string, force bool) error {
-	_, st, err := inspect(dir)
+	root, st, err := inspect(dir)
 	if err != nil {
 		return err
 	}
 	if st == targetPopulated && !force {
 		return &NotEmptyError{Dir: dir}
+	}
+	if st != targetMissing {
+		return sourcebase.Check(root)
 	}
 	return nil
 }
@@ -194,15 +251,24 @@ func Extract(ctx context.Context, archivePath, dir string, opts Options) (*Resul
 	if err != nil {
 		return nil, err
 	}
-	if st == targetPopulated {
-		if !opts.Force {
+	if st != targetMissing {
+		// Refuse before anything is written, and before anything is removed.
+		if st == targetPopulated && !opts.Force {
 			return nil, &NotEmptyError{Dir: dir}
 		}
-		for _, e := range entries {
-			if err := checkNoSymlink(root, e.rel); err != nil {
+		if err := sourcebase.Check(root); err != nil {
+			return nil, err
+		}
+		if st == targetPopulated {
+			if err := checkInPlace(root, entries); err != nil {
 				return nil, err
 			}
 		}
+		if err := removeStaleStaging(root); err != nil {
+			return nil, err
+		}
+	}
+	if st == targetPopulated {
 		res, written, err := write(ctx, root, entries, lim)
 		if err == nil && opts.Finalize != nil {
 			err = opts.Finalize(root)
@@ -236,7 +302,7 @@ func extractStaged(ctx context.Context, root string, created bool, entries []ent
 		}
 		root = resolved
 	}
-	stage, err := os.MkdirTemp(root, ".sureva-pull-")
+	stage, err := os.MkdirTemp(root, stagingPrefix)
 	if err != nil {
 		if created {
 			_ = os.Remove(root)
@@ -265,11 +331,6 @@ func extractStaged(ctx context.Context, root string, created bool, entries []ent
 		return nil, ctx.Err()
 	}
 
-	// An empty target may hold the state directory of an earlier pull; the new
-	// tree brings its own.
-	if _, statErr := os.Lstat(filepath.Join(stage, sourcebase.Dir)); statErr == nil {
-		_ = os.RemoveAll(filepath.Join(root, sourcebase.Dir))
-	}
 	children, err := os.ReadDir(stage)
 	if err != nil {
 		undo()
@@ -277,14 +338,54 @@ func extractStaged(ctx context.Context, root string, created bool, entries []ent
 	}
 	moved := 0
 	for _, c := range children {
-		if err := os.Rename(filepath.Join(stage, c.Name()), filepath.Join(root, c.Name())); err != nil {
+		from, to := filepath.Join(stage, c.Name()), filepath.Join(root, c.Name())
+		if c.Name() == sourcebase.Dir {
+			// An empty target may hold the state directory of an earlier pull.
+			// It is never removed or recursed into: only the files the new tree
+			// brings replace their namesakes (a rename never follows a link at
+			// its destination).
+			if err := mergeStateDir(from, to); err != nil {
+				_ = os.RemoveAll(stage)
+				return nil, &PartialError{Written: moved, Err: fmt.Errorf("move %s into place: %w", c.Name(), err)}
+			}
+			moved++
+			continue
+		}
+		if err := os.Rename(from, to); err != nil {
 			_ = os.RemoveAll(stage)
 			return nil, &PartialError{Written: moved, Err: fmt.Errorf("move %s into place: %w", c.Name(), err)}
 		}
 		moved++
 	}
-	_ = os.Remove(stage)
+	// What is left is the emptied state directory of the staged tree.
+	_ = os.RemoveAll(stage)
 	return res, nil
+}
+
+// mergeStateDir moves the children of the freshly written state directory from
+// into to. When to does not exist the whole directory moves; when it exists as
+// a real directory only its namesake children are replaced and the rest stays.
+func mergeStateDir(from, to string) error {
+	fi, err := os.Lstat(to)
+	if errors.Is(err, fs.ErrNotExist) {
+		return os.Rename(from, to)
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a plain directory", to)
+	}
+	children, err := os.ReadDir(from)
+	if err != nil {
+		return err
+	}
+	for _, c := range children {
+		if err := os.Rename(filepath.Join(from, c.Name()), filepath.Join(to, c.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // plan validates every entry and returns the ones to write. It writes nothing.
@@ -294,13 +395,14 @@ func plan(files []*zip.File, lim Limits) ([]entry, error) {
 	}
 	out := make([]entry, 0, len(files))
 	seen := make(map[string]struct{}, len(files))
+	names := make(claims, len(files))
 	var declared uint64
 	for _, f := range files {
 		rel, isDir, reason := cleanName(f.Name)
 		if reason != "" {
 			return nil, &UnsafeArchiveError{Entry: f.Name, Reason: reason}
 		}
-		if strings.EqualFold(strings.SplitN(rel, "/", 2)[0], sourcebase.Dir) {
+		if isReserved(strings.SplitN(rel, "/", 2)[0]) {
 			return nil, &UnsafeArchiveError{Entry: f.Name, Reason: "uses the reserved " + sourcebase.Dir + " directory"}
 		}
 		mode := f.Mode()
@@ -316,6 +418,9 @@ func plan(files []*zip.File, lim Limits) ([]entry, error) {
 			return nil, &UnsafeArchiveError{Entry: f.Name, Reason: "appears more than once"}
 		}
 		seen[rel] = struct{}{}
+		if reason := names.claim(rel, isDir); reason != "" {
+			return nil, &UnsafeArchiveError{Entry: f.Name, Reason: reason}
+		}
 
 		if !isDir {
 			declared += f.UncompressedSize64
@@ -334,6 +439,66 @@ func plan(files []*zip.File, lim Limits) ([]entry, error) {
 		out = append(out, entry{file: f, rel: rel, isDir: isDir, perm: perm | 0o600})
 	}
 	return out, nil
+}
+
+// claim records what an entry occupies. Names are compared case-folded, so the
+// verdict is the same on every platform: on a case-insensitive filesystem
+// (macOS, Windows) "a/B" and "A/b" are one file. It is also where a file and a
+// path beneath it are caught.
+type claim struct {
+	name string
+	kind claimKind
+}
+
+type claimKind int
+
+const (
+	claimFile    claimKind = iota
+	claimDir               // listed as a directory entry
+	claimImplied           // only exists as the parent of another entry
+)
+
+type claims map[string]claim
+
+// claim returns "" when rel can be placed next to everything seen so far, else
+// the reason it cannot.
+func (c claims) claim(rel string, isDir bool) string {
+	parts := strings.Split(rel, "/")
+	for i := 1; i < len(parts); i++ {
+		parent := strings.Join(parts[:i], "/")
+		key := foldName(parent)
+		switch got, ok := c[key]; {
+		case !ok:
+			c[key] = claim{name: parent, kind: claimImplied}
+		case got.kind == claimFile:
+			return fmt.Sprintf("is inside %q, which the archive also has as a file", got.name)
+		}
+	}
+	key := foldName(rel)
+	got, ok := c[key]
+	switch {
+	case !ok:
+	case got.kind == claimImplied && isDir:
+	case got.kind == claimImplied:
+		return "is a file, but the archive also has entries inside it"
+	default:
+		return fmt.Sprintf("collides with %q, which is the same name on a case-insensitive filesystem", got.name)
+	}
+	kind := claimFile
+	if isDir {
+		kind = claimDir
+	}
+	c[key] = claim{name: rel, kind: kind}
+	return ""
+}
+
+// foldName is the key names are compared by: case-insensitive.
+func foldName(s string) string { return strings.ToLower(s) }
+
+// isReserved reports whether a top-level name is the state directory, in any
+// case and with the trailing dots and spaces Windows ignores.
+func isReserved(top string) bool {
+	return strings.EqualFold(strings.TrimRight(top, ". "), sourcebase.Dir)
 }
 
 // cleanName turns a zip entry name into a relative slash path, or says why it
@@ -359,8 +524,89 @@ func cleanName(name string) (rel string, isDir bool, reason string) {
 		case ".", "..":
 			return "", false, `has a "` + part + `" path segment`
 		}
+		if reason := badSegment(part); reason != "" {
+			return "", false, reason
+		}
 	}
 	return strings.TrimSuffix(name, "/"), isDir, ""
+}
+
+// windowsReserved are the device names Windows reserves, with or without an
+// extension and in any case.
+var windowsReserved = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true, "CONIN$": true, "CONOUT$": true,
+}
+
+func init() {
+	for i := '1'; i <= '9'; i++ {
+		windowsReserved["COM"+string(i)] = true
+		windowsReserved["LPT"+string(i)] = true
+	}
+	for _, sup := range []string{"¹", "²", "³"} {
+		windowsReserved["COM"+sup] = true
+		windowsReserved["LPT"+sup] = true
+	}
+}
+
+// badSegment says why one path segment cannot be written on every supported
+// platform, or returns "". The rules are the same everywhere so one archive
+// behaves the same everywhere: Windows strips trailing dots and spaces (so
+// ".sureva." would become the reserved name and ".. " would become ".."),
+// reserves device names, and treats ":" as a stream or drive separator. The
+// characters <>"|?* are refused as well: Windows cannot create them and
+// frameworks do not use them in file names ([id], (group), @slot and $ are
+// fine), so refusing costs a real project nothing.
+func badSegment(part string) string {
+	if last := part[len(part)-1]; last == '.' || last == ' ' {
+		return "has a name ending in a dot or a space, which Windows silently strips"
+	}
+	for _, r := range part {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			return "contains a control character"
+		case r == ':':
+			return `contains ":" (a drive or stream separator on Windows)`
+		case strings.ContainsRune(`<>"|?*`, r):
+			return "contains a character Windows does not allow in file names (" + string(r) + ")"
+		}
+	}
+	base, _, _ := strings.Cut(part, ".")
+	if windowsReserved[strings.ToUpper(strings.TrimRight(base, " "))] {
+		return "uses a device name reserved on Windows"
+	}
+	return ""
+}
+
+// checkInPlace compares every entry with what already exists under root, before
+// anything is written. A symlink anywhere on an entry's path is refused (never
+// followed or replaced); a directory where the archive has a file, or a file
+// where it needs a directory, is a conflict. No existing content is removed.
+func checkInPlace(root string, entries []entry) error {
+	for _, e := range entries {
+		if err := checkNoSymlink(root, e.rel); err != nil {
+			return err
+		}
+		cur := root
+		parts := strings.Split(e.rel, "/")
+		for i, part := range parts {
+			cur = filepath.Join(cur, part)
+			fi, err := os.Lstat(cur)
+			if err != nil {
+				break // the rest does not exist yet
+			}
+			rel := strings.Join(parts[:i+1], "/")
+			last := i == len(parts)-1
+			switch {
+			case !last && !fi.IsDir():
+				return &ConflictError{Path: rel, Reason: "is a file in the target, but the archive needs a directory there"}
+			case last && e.isDir && !fi.IsDir():
+				return &ConflictError{Path: rel, Reason: "is a file in the target, but the archive has a directory there"}
+			case last && !e.isDir && fi.IsDir():
+				return &ConflictError{Path: rel, Reason: "is a directory in the target, but the archive has a file there"}
+			}
+		}
+	}
+	return nil
 }
 
 // checkNoSymlink refuses rel when any existing component of root/rel is a

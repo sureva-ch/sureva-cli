@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/sureva-ch/sureva-cli/internal/sourcebase"
 )
 
 type zent struct {
@@ -338,7 +340,8 @@ func TestExtract_StateDirectoryAloneCountsAsEmpty(t *testing.T) {
 	z := makeZip(t, zent{name: "a.txt", body: "a"})
 
 	_, err := Extract(context.Background(), z, dir, Options{Finalize: func(root string) error {
-		return os.MkdirAll(filepath.Join(root, ".sureva"), 0o755)
+		_, werr := sourcebase.Write(root, sourcebase.Base{SourceID: "new"})
+		return werr
 	}})
 	if err != nil {
 		t.Fatalf("a directory holding only .sureva must count as empty: %v", err)
@@ -346,8 +349,8 @@ func TestExtract_StateDirectoryAloneCountsAsEmpty(t *testing.T) {
 	if got := readFile(t, filepath.Join(dir, "a.txt")); got != "a" {
 		t.Errorf("a.txt = %q", got)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".sureva", "source.json")); err == nil {
-		t.Error("the old state file should have been replaced by the new state directory")
+	if b := sourcebase.Read(dir); b == nil || b.SourceID != "new" {
+		t.Errorf("the old state file should have been replaced by the new one, got %+v", b)
 	}
 	assertNoStaging(t, dir)
 }
@@ -454,5 +457,277 @@ func TestExtract_FinalizeFailureUndoesStagedTree(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 0 {
 		t.Errorf("the directory must be as it was, found %d entries", len(entries))
+	}
+}
+
+// assertNothingWritten checks that a refused extraction left dir exactly as it
+// was: missing or empty.
+func assertNothingWritten(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a refused archive must write nothing, found %d entries in %s", len(entries), dir)
+	}
+}
+
+func TestExtract_CollidingNamesRefusedBeforeAnyWrite(t *testing.T) {
+	cases := []struct {
+		name string
+		ents []zent
+	}{
+		{"file case collision", []zent{{name: "first.txt", body: "1"}, {name: "a/B", body: "x"}, {name: "A/b", body: "y"}}},
+		{"same directory", []zent{{name: "first.txt", body: "1"}, {name: "Readme", body: "x"}, {name: "README", body: "y"}}},
+		{"file then directory of other case", []zent{{name: "first.txt", body: "1"}, {name: "a", body: "x"}, {name: "A/b", body: "y"}}},
+		{"directory entry vs file", []zent{{name: "first.txt", body: "1"}, {name: "d/", mode: fs.ModeDir | 0o755}, {name: "D", body: "y"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "out")
+			_, err := Extract(context.Background(), makeZip(t, tc.ents...), dir, Options{})
+			if !isUnsafe(err) {
+				t.Fatalf("want an *UnsafeArchiveError, got %v", err)
+			}
+			assertNothingWritten(t, dir)
+		})
+	}
+}
+
+func TestExtract_FileAndPathBeneathItRefusedAsUnsafeArchive(t *testing.T) {
+	cases := []struct {
+		name string
+		ents []zent
+	}{
+		{"file then child", []zent{{name: "first.txt", body: "1"}, {name: "a", body: "x"}, {name: "a/b", body: "y"}}},
+		{"child then file", []zent{{name: "first.txt", body: "1"}, {name: "a/b", body: "y"}, {name: "a", body: "x"}}},
+		{"deep child then file", []zent{{name: "first.txt", body: "1"}, {name: "a/b/c", body: "y"}, {name: "a/b", body: "x"}}},
+		{"other case", []zent{{name: "first.txt", body: "1"}, {name: "A", body: "x"}, {name: "a/b", body: "y"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, force := range []bool{false, true} {
+				dir := t.TempDir()
+				if force {
+					if err := os.WriteFile(filepath.Join(dir, "mine"), []byte("m"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				_, err := Extract(context.Background(), makeZip(t, tc.ents...), dir, Options{Force: force})
+				if !isUnsafe(err) {
+					t.Fatalf("force=%v: want an *UnsafeArchiveError, got %v", force, err)
+				}
+				if _, statErr := os.Stat(filepath.Join(dir, "first.txt")); statErr == nil {
+					t.Errorf("force=%v: an entry was written before the refusal", force)
+				}
+			}
+		})
+	}
+}
+
+func TestExtract_ForceTypeConflictWithExistingContentRefusedUpFront(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+		ents  []zent
+		path  string
+	}{
+		{
+			name: "directory where the archive has a file",
+			setup: func(t *testing.T, dir string) {
+				if err := os.MkdirAll(filepath.Join(dir, "x"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "x", "keep"), []byte("k"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			ents: []zent{{name: "first.txt", body: "1"}, {name: "x", body: "file"}},
+			path: "x",
+		},
+		{
+			name: "file where the archive needs a directory",
+			setup: func(t *testing.T, dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "y"), []byte("mine"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			ents: []zent{{name: "first.txt", body: "1"}, {name: "y/z.txt", body: "z"}},
+			path: "y",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.setup(t, dir)
+
+			_, err := Extract(context.Background(), makeZip(t, tc.ents...), dir, Options{Force: true})
+
+			if err == nil {
+				t.Fatal("want a refusal")
+			}
+			var partial *PartialError
+			if errors.As(err, &partial) {
+				t.Fatalf("the conflict must be found before writing, got %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.path) {
+				t.Errorf("the message must name %q: %v", tc.path, err)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, "first.txt")); statErr == nil {
+				t.Error("an entry was written before the conflict was reported")
+			}
+			if tc.path == "x" {
+				if got := readFile(t, filepath.Join(dir, "x", "keep")); got != "k" {
+					t.Error("user content was removed")
+				}
+			}
+		})
+	}
+}
+
+func TestExtract_PlatformHostileNamesRefused(t *testing.T) {
+	names := []string{
+		".sureva.", ".sureva ", ".SUREVA./x", ".. ", "a/.. ", "trailingdot.", "trailingspace ", "dir./file",
+		"CON", "con", "Con.txt", "PRN", "AUX.log", "NUL", "COM1", "com9.txt", "LPT1", "lpt9.x", "src/NUL.js", "CON .txt", "COM¹",
+		"a:b", "C:", "file.txt:stream", "dir/a:b",
+		"a<b", "a>b", `a"b`, "a|b", "a?b", "a*b",
+		"tab\tname", "new\nline", "bell\x07", "del\x7f",
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "out")
+			_, err := Extract(context.Background(), makeZip(t, zent{name: "ok.txt", body: "1"}, zent{name: name, body: "x"}), dir, Options{})
+			if !isUnsafe(err) {
+				t.Fatalf("want an *UnsafeArchiveError, got %v", err)
+			}
+			assertNothingWritten(t, dir)
+		})
+	}
+}
+
+func TestExtract_ConventionalNamesAreStillAccepted(t *testing.T) {
+	names := []string{
+		"app/[id]/page.tsx", "app/(group)/x.ts", "@slot/page.tsx", "$layout.js", "a+b.txt", "con-sole.txt", "console.log",
+		"communicate.md", "com10.txt", "auxiliary", ".env.example", ".github/workflows/ci.yml", "a b.txt", "...x", "README.md",
+		"café.txt", "_next/static/a.js", "a~1.txt", "a,b;c=d.txt", "a#b%c&d.txt", "a'b.txt", "a!b@c.txt",
+	}
+	var ents []zent
+	for _, n := range names {
+		ents = append(ents, zent{name: n, body: "x"})
+	}
+	dir := filepath.Join(t.TempDir(), "out")
+	if _, err := Extract(context.Background(), makeZip(t, ents...), dir, Options{}); err != nil {
+		t.Fatalf("conventional names must extract: %v", err)
+	}
+}
+
+func TestExtract_StaleStagingDirectoriesAreRemovedAndDoNotCountAsContent(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, ".sureva-pull-123456")
+	if err := os.MkdirAll(filepath.Join(stale, "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "deep", "f"), []byte("half"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Not the exact pattern: left alone.
+	lookalike := filepath.Join(dir, ".sureva-pull-keep")
+	if err := os.MkdirAll(lookalike, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink with the exact pattern is never followed or removed.
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "precious"), []byte("p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, ".sureva-pull-999")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// The lookalike and the link count as user content, so --force is needed.
+	if _, err := Extract(context.Background(), makeZip(t, zent{name: "a.txt", body: "a"}), dir, Options{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(stale); err == nil {
+		t.Error("the stale staging directory was not removed")
+	}
+	if _, err := os.Stat(lookalike); err != nil {
+		t.Error("a directory that is not an exact staging name was removed")
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Error("a symlink was removed")
+	}
+	if got := readFile(t, filepath.Join(outside, "precious")); got != "p" {
+		t.Error("the link was followed")
+	}
+}
+
+func TestExtract_OnlyStaleStagingCountsAsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".sureva-pull-42"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Preflight(dir, false); err != nil {
+		t.Fatalf("a killed pull's staging directory must not block the next pull: %v", err)
+	}
+	if _, err := Extract(context.Background(), makeZip(t, zent{name: "a.txt", body: "a"}), dir, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	assertNoStaging(t, dir)
+}
+
+func TestExtract_EmptyTargetKeepsTheStateDirectoryAndReplacesOnlyTheRecord(t *testing.T) {
+	dir := t.TempDir()
+	sd := filepath.Join(dir, ".sureva")
+	if err := os.MkdirAll(sd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sd, "source.json"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sd, "notes.txt"), []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	z := makeZip(t, zent{name: "a.txt", body: "a"})
+	fin := func(root string) error {
+		_, err := sourcebase.Write(root, sourcebase.Base{SourceID: "new"})
+		return err
+	}
+
+	if _, err := Extract(context.Background(), z, dir, Options{Finalize: fin}); err != nil {
+		t.Fatal(err)
+	}
+	if b := sourcebase.Read(dir); b == nil || b.SourceID != "new" {
+		t.Errorf("record = %+v", b)
+	}
+	if got := readFile(t, filepath.Join(sd, "notes.txt")); got != "mine" {
+		t.Error("a file the command does not own was removed from .sureva")
+	}
+}
+
+func TestExtract_EmptyTargetRefusesAStateRecordThatIsASymlinkBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".sureva"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, ".sureva", "source.json")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := Extract(context.Background(), makeZip(t, zent{name: "a.txt", body: "a"}), dir, Options{})
+	var se *sourcebase.StateError
+	if !errors.As(err, &se) {
+		t.Fatalf("want a *sourcebase.StateError, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "a.txt")); statErr == nil {
+		t.Error("files were written before the refusal")
+	}
+	if got := readFile(t, victim); got != "precious" {
+		t.Error("the link target changed")
 	}
 }

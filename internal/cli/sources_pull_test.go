@@ -692,3 +692,87 @@ func TestSourcesPull_HelpAndTree(t *testing.T) {
 	}
 	t.Error("sources pull is not in the help tree")
 }
+
+func TestSourcesPull_ForceRefusesAStateFileThatIsASymlinkBeforeDownloading(t *testing.T) {
+	victim := filepath.Join(t.TempDir(), "victim.txt")
+	if err := os.WriteFile(victim, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".sureva"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mine.txt"), []byte("m"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, ".sureva", "source.json")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	f := newPullFake(t, projectZip(t))
+	_, errBuf, exec := newTestRoot(t, f.api)
+
+	err := exec(pullArgs(dir, "--force")...)
+
+	if got := exitCode(err); got != output.ExitValidation {
+		t.Fatalf("exit = %d; stderr: %s", got, errBuf)
+	}
+	if code := envelopeCode(t, errBuf); code != "validation_error" {
+		t.Errorf("code = %s", code)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "precious" {
+		t.Errorf("the link target was overwritten: %q", got)
+	}
+	if f.storageHits != 0 {
+		t.Errorf("nothing may be downloaded, storage hits = %d", f.storageHits)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "index.js")); statErr == nil {
+		t.Error("files were extracted before the state file was refused")
+	}
+}
+
+func TestSourcesPull_ForceRefusesAStateDirectoryThatIsASymlink(t *testing.T) {
+	elsewhere := t.TempDir()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mine.txt"), []byte("m"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(dir, ".sureva")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	f := newPullFake(t, projectZip(t))
+	_, errBuf, exec := newTestRoot(t, f.api)
+
+	err := exec(pullArgs(dir, "--force")...)
+
+	if got := exitCode(err); got != output.ExitValidation {
+		t.Fatalf("exit = %d; stderr: %s", got, errBuf)
+	}
+	if _, statErr := os.Stat(filepath.Join(elsewhere, "source.json")); statErr == nil {
+		t.Error("the state file was created through the link")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "index.js")); statErr == nil {
+		t.Error("files were extracted before the state directory was refused")
+	}
+}
+
+func TestSourcesPull_ForceTypeConflictIsRefusedBeforeExtracting(t *testing.T) {
+	dir := t.TempDir()
+	// The archive has "src/app.js"; the user has a file named "src".
+	if err := os.WriteFile(filepath.Join(dir, "src"), []byte("a file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := newPullFake(t, projectZip(t))
+	_, errBuf, exec := newTestRoot(t, f.api)
+
+	err := exec(pullArgs(dir, "--force")...)
+
+	if got := exitCode(err); got != output.ExitValidation {
+		t.Fatalf("exit = %d; stderr: %s", got, errBuf)
+	}
+	if !strings.Contains(errBuf.String(), "src") {
+		t.Errorf("the message must name the conflicting path: %s", errBuf)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "index.js")); statErr == nil {
+		t.Error("files were written before the conflict was reported")
+	}
+}
