@@ -44,10 +44,25 @@ func (e *DownloadError) Expired() bool {
 	return e.S3Code == "ExpiredToken" || strings.Contains(strings.ToLower(e.Message), "expired")
 }
 
+// checkDownloadRedirect caps the redirects followed from a download URL, strips
+// credentials from them and refuses to leave https. A presigned URL is a
+// credential: a redirect must never carry it to clear text.
+func checkDownloadRedirect(r *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return errors.New("too many redirects")
+	}
+	if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && r.URL.Scheme != "https" {
+		return errors.New("refused a redirect from https to " + r.URL.Scheme)
+	}
+	r.Header.Del("Authorization")
+	return nil
+}
+
 // DownloadSourceArchive fetches the presigned url straight from storage into
 // dst and returns the hex sha256 and the number of bytes written. The API bearer
 // token is not sent there: the request is built here, on a fresh http.Client,
-// with no Authorization header, and none is forwarded on a redirect either.
+// with no Authorization header, and none is forwarded on a redirect either. A
+// redirect that downgrades https to another scheme is refused.
 //
 // At most maxBytes are read; one more byte is ErrDownloadTooLarge. The body is
 // streamed through the hash into dst and never held in memory. An error never
@@ -60,14 +75,8 @@ func (c *Client) DownloadSourceArchive(ctx context.Context, rawURL string, maxBy
 	req.Header.Set("User-Agent", "sureva-cli/"+version.Version)
 
 	hc := &http.Client{
-		Timeout: uploadTimeout,
-		CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			if len(via) >= maxRedirects {
-				return errors.New("too many redirects")
-			}
-			r.Header.Del("Authorization")
-			return nil
-		},
+		Timeout:       uploadTimeout,
+		CheckRedirect: checkDownloadRedirect,
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

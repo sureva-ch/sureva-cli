@@ -127,3 +127,53 @@ func TestGetSource_NotFound(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestSourceIDsAreEscapedAsOnePathSegment(t *testing.T) {
+	t.Parallel()
+	var gotRaw string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotRaw = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	ctx := context.Background()
+
+	if _, err := c.DownloadSource(ctx, "org-1", "app-1", "../../x?y=1#z"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/v1/orgs/org-1/apps/app-1/sources/..%2F..%2Fx%3Fy=1%23z/download"; gotRaw != want {
+		t.Errorf("path = %q, want %q", gotRaw, want)
+	}
+	if _, err := c.GetSource(ctx, "org/1", "app 1", "a/b"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/v1/orgs/org%2F1/apps/app%201/sources/a%2Fb"; gotRaw != want {
+		t.Errorf("path = %q, want %q", gotRaw, want)
+	}
+	if _, err := c.DownloadSource(ctx, "org-1", "app-1", "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/v1/orgs/org-1/apps/app-1/sources/latest/download"; gotRaw != want {
+		t.Errorf("latest path = %q, want %q", gotRaw, want)
+	}
+}
+
+func TestEmptySourceIDIsRejectedWithoutARequest(t *testing.T) {
+	t.Parallel()
+	hit := false
+	c, _ := newTestClient(t, func(http.ResponseWriter, *http.Request) { hit = true })
+	ctx := context.Background()
+
+	if _, err := c.GetSource(ctx, "o", "a", ""); err == nil {
+		t.Error("GetSource: want an error")
+	}
+	if _, err := c.DownloadSource(ctx, "o", "a", ""); err == nil {
+		t.Error("DownloadSource: want an error")
+	}
+	if _, err := c.CompleteSource(ctx, "o", "a", ""); err == nil {
+		t.Error("CompleteSource: want an error")
+	}
+	if hit {
+		t.Error("a request was sent for an empty id")
+	}
+}
