@@ -50,14 +50,19 @@ EXIT CODES
   5  network error (no HTTP response)
 
   Exit 1 covers several API failures that need different handling; tell them
-  apart by the "code" (and "http_status") in the stderr envelope. For
-  deploys trigger: source_expired (410, release no longer stored),
-  source_not_ready (409, release not ready or rejected), deploy_failed (the
+  apart by the "code" (and "http_status") in the stderr envelope. The API's own
+  stable error code is repeated in "details.api_code" when it sent one, with the
+  facts that come with it (details.source_status, details.validation_code,
+  details.retryable). For deploys trigger: source_expired (410, release no
+  longer stored), source_not_ready (409, release not ready or rejected),
+  no_ready_source (404, exit 3, nothing to deploy yet), deploy_failed (the
   deployment itself failed under --wait). For deploy: archive_too_large,
-  source_rejected, empty_archive and github_backed_app exit 4;
-  validation_timeout, pack_failed, upload_failed, upload_expired,
-  wait_timeout, deploy_failed and interrupted (SIGINT/SIGTERM) exit 1 (see
-  'sureva deploy --help').
+  source_rejected, empty_archive, github_backed_app and
+  app_source_upload_limit_exceeded exit 4; validation_unavailable (validation
+  could not run: try again later), validation_timeout, pack_failed,
+  upload_failed, upload_expired, source_not_completable, wait_timeout,
+  deploy_failed and interrupted (SIGINT/SIGTERM) exit 1 (see 'sureva deploy
+  --help').
 
 AUTHENTICATION
   Run sureva login for interactive browser authentication.

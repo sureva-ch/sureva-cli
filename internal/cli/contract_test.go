@@ -24,6 +24,8 @@ const (
 	apiSourceNotReady     = `{"code":"source_not_ready","error":"reworded: not deployable","source_status":"rejected","validation_code":"archive_empty"}`
 	apiSourceNotReadyBare = `{"code":"source_not_ready","error":"reworded: not deployable","source_status":"validating"}`
 	apiSourceExpired      = `{"code":"source_expired","error":"reworded: gone"}`
+	// app_source_validation.go CompleteAppSourceUpload.
+	apiNotCompletable = `{"code":"source_not_completable","error":"reworded","source_status":"ready"}`
 	// app_source_download.go and app_sources.go.
 	apiNotUploadBacked = `{"code":"app_not_upload_backed","error":"reworded: clone the repository"}`
 	apiUploadLimit     = `{"code":"app_source_upload_limit_exceeded","error":"reworded: limit"}`

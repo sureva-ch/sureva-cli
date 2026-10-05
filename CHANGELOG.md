@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Source and deploy errors are classified by the API's stable error `code`
+  (`source_not_found`, `no_ready_source`, `source_not_ready`, `source_expired`,
+  `source_not_completable`, `app_not_upload_backed`,
+  `app_source_upload_limit_exceeded`) in `deploy`, `deploys trigger` and
+  `sources get|list|pull`, not by the message text. The client keeps the code and
+  its detail fields (`source_status`, `validation_code`, `environments`) on
+  `*APIError`.
+- The stderr error envelope carries an optional `details` object (omitted when
+  empty) with the API's own code as `api_code` and the detail fields that came
+  with it. Existing keys are unchanged.
+- New envelope codes: `no_ready_source` (404, exit 3, `deploy`/`deploys trigger`
+  with nothing to deploy), `app_source_upload_limit_exceeded` (422, exit 4),
+  `source_not_completable` (409, exit 1) and `validation_unavailable` (exit 1,
+  validation could not run on the platform's side). `sources pull` keeps
+  `no_source` for the same API state.
+- `sources get|list` and the `source` object of `deploy` show `validation_code`,
+  `retryable` and `base_source_id`. A rejected `deploy` carries
+  `details.validation_code` and `details.retryable` in its envelope.
+- `deploy` repeats `complete` up to 3 times, with growing pauses derived from
+  `--wait-interval`, when validation is rejected as `retryable`, within
+  `--wait-timeout`; the output reports `validation_retries`.
+
+### Changed
+
+- The message-based recognition of `source_expired` and `source_not_ready`
+  remains only as a fallback for a response that carries no `code` (the API's
+  download endpoint sends none for them yet). A 409 with another API code no
+  longer becomes `source_not_ready` because of its wording.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

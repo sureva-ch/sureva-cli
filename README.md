@@ -37,6 +37,16 @@ Error envelopes on stderr always follow this shape:
 { "error": "app not found", "code": "not_found", "http_status": 404 }
 ```
 
+When the API sent its own stable error code, or facts that come with it, the
+envelope also carries `details` (omitted otherwise):
+```json
+{ "error": "this source archive is rejected ...", "code": "source_not_ready", "http_status": 409,
+  "details": { "api_code": "source_not_ready", "source_status": "rejected", "validation_code": "archive_empty" } }
+```
+`code` is the CLI's vocabulary and is what scripts switch on; `details.api_code`
+is the API's code, so a code this CLI version does not know is still visible.
+Source and deploy errors are classified by the API's `code`, never by its message.
+
 Exit codes:
 
 | Code | Meaning |
@@ -303,9 +313,13 @@ sureva sources pull <app-id> --org <slug> --dir ./app    # download the code
 
 Each row carries `status` (`pending` | `validating` | `rejected` | `ready` |
 `expired`), `release_tag`, `size_bytes`, `sha256`, `seq`, `created_at`,
-`available` and, for a rejected archive, `validation_error`. `available: false`
-on a `ready` release means its stored version is gone and it can no longer be
-deployed.
+`available` and, for a rejected archive, `validation_error` (prose, may be
+reworded), `validation_code` (the stable cause, for example `credentials_found`
+or `promote_failed`) and `retryable`. `retryable: true` means the platform
+failed and sending the same archive again can succeed; `false` means the archive
+has to change. A row rejected before the API recorded codes has neither.
+`available: false` on a `ready` release means its stored version is gone and it
+can no longer be deployed.
 
 ### Pull the code of an upload-backed app
 
@@ -372,7 +386,7 @@ link is never printed. Failures an agent should tell apart, by the envelope
 | `code` | Exit | Meaning |
 |---|---|---|
 | `auth_error` | 2 | credentials missing or expired |
-| `no_source` | 3 | the app has no ready release yet: start a new project and publish it with `deploy`; not a failure |
+| `no_source` | 3 | the app has no ready release yet: start a new project and publish it with `deploy`; not a failure (`deploy` and `deploys trigger` call the same API state `no_ready_source`; `no_source` is the name `pull` has always used) |
 | `not_found` | 3 | unknown app or unknown `--source-id` |
 | `dir_not_empty` | 4 | `--dir` already holds files; use `--force` |
 | `github_backed_app` | 4 | the app's code is its GitHub repository: clone it (named in the message when known) |
@@ -404,6 +418,16 @@ and the timeout bounds the validation wait and the deployment wait separately.
 A GitHub-backed app is refused up front (`github_backed_app`): use
 `deploys trigger` for it.
 
+**Validation that could not run is retried.** When the API reports a rejection
+as `retryable` (storage, dispatch or a worker that did not finish: the archive
+was never judged), `deploy` repeats the `complete` call up to 3 times, pausing
+2x, 4x and 8x `--wait-interval` (at most one minute), because the API restarts
+validation of such a source. Retries and pauses count against the validation
+`--wait-timeout`; the output reports `validation_retries`. If that does not help
+the command fails with `validation_unavailable` (run it again later). A refusal
+about the archive itself (`retryable: false`, for example `credentials_found`) fails at
+once with `source_rejected`.
+
 What is packed: `node_modules/`, `.git/`, `.sureva/` and `.env*` are always left
 out, at any depth. So is everything `.gitignore` ignores (inside a git work tree the file
 list comes from `git ls-files`, so git's own rules apply; elsewhere `.gitignore`
@@ -426,9 +450,14 @@ the envelope `code`:
 |---|---|---|
 | `auth_error` | 2 | credentials missing or expired |
 | `archive_too_large` | 4 | over the API's limit; nothing was uploaded |
-| `source_rejected` | 4 | validation refused the archive; the reason is in the message and `source.validation_error` |
+| `source_rejected` | 4 | validation refused the archive, so fix the archive; the reason is in the message and `source.validation_error`, the stable cause in `details.validation_code` (`details.retryable` is false) |
 | `empty_archive` | 4 | nothing left to pack after the exclusions |
 | `github_backed_app` | 4 | the app deploys from GitHub |
+| `app_source_upload_limit_exceeded` | 4 | the app reached its daily upload limit; try again tomorrow (UTC) |
+| `validation_unavailable` | 1 | validation could not run (a platform-side cause, `details.retryable: true`) and the retries did not help; run the command again later |
+| `source_not_completable` | 1 | the upload cannot be completed again (`details.source_status` says why) |
+| `source_expired` / `source_not_ready` | 1 | the release is no longer stored / not deployable (`details.source_status`, `details.validation_code`) |
+| `no_ready_source` | 3 | the deployment found no ready release |
 | `validation_timeout` | 1 | validation did not finish; see `sources get` |
 | `pack_failed` | 1 | the directory could not be read or zipped |
 | `interrupted` | 1 | stopped by SIGINT or SIGTERM; the temporary archive was removed |
@@ -462,8 +491,9 @@ envelope:
 | `code` | HTTP | Meaning |
 |--------|------|---------|
 | `source_expired` | 410 | The release is no longer stored; upload the source again |
-| `source_not_ready` | 409 | The release is pending, validating, rejected or expired |
-| `not_found` | 404 | Unknown release, or no ready release to deploy (exit 3) |
+| `source_not_ready` | 409 | The release is pending, validating, rejected or expired; `details.source_status` and `details.validation_code` say which and why |
+| `no_ready_source` | 404 | No `--source-id` was given and the app has no ready release (exit 3) |
+| `not_found` | 404 | Unknown release (exit 3) |
 | `validation_error` | 400 | `--tag` on an upload-backed app or `--source-id` on a GitHub-backed one (exit 4) |
 | `deploy_failed` | n/a | With `--wait`: the deployment itself failed or was cancelled |
 
