@@ -22,6 +22,9 @@ const (
 	apiCodeUploadLimit          = "app_source_upload_limit_exceeded" // 422, create upload: daily limit
 	apiCodeRetryTooSoon         = "source_retry_too_soon"            // 409, complete: carries retry_after_seconds
 	apiCodeRetryLimit           = "source_retry_limit_reached"       // 409, complete: carries attempts, max_attempts
+	apiCodeInvalidBase          = "invalid_base_source_id"           // 400, create upload: malformed base_source_id
+	apiCodeBaseNotFound         = "base_source_not_found"            // 422, create upload: base is not a source of this app
+	validationCodeStaleBase     = "stale_base"                       // rejected source: the base is no longer the latest
 )
 
 // platformValidationCodes are the validation_code values of a rejection whose

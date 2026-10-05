@@ -28,15 +28,22 @@ const largestEntriesShown = 5
 // logs are) next to the error envelope on stderr.
 type deployResult struct {
 	AppID string `json:"app_id"`
-	// BaseSourceID is the release the directory was pulled from, read from
-	// .sureva/source.json. It is reported only: it is not sent to the API.
-	BaseSourceID string            `json:"base_source_id,omitempty"`
-	Archive      *archiveSummary   `json:"archive,omitempty"`
-	Source       *client.AppSource `json:"source,omitempty"`
+	// BaseSourceID is the release the directory is based on, read from
+	// .sureva/source.json when it belongs to this app. BaseSent says whether it
+	// was sent to the API as the upload's base (it is not with --no-base).
+	BaseSourceID string             `json:"base_source_id,omitempty"`
+	BaseSent     bool               `json:"base_sent"`
+	Archive      *archiveSummary    `json:"archive,omitempty"`
+	Source       *client.AppSource  `json:"source,omitempty"`
+	Deployment   *client.Deployment `json:"deployment,omitempty"`
 	// ValidationRetries counts how often 'complete' was repeated because
 	// validation was refused for a reason on the platform's side.
-	ValidationRetries int                `json:"validation_retries,omitempty"`
-	Deployment        *client.Deployment `json:"deployment,omitempty"`
+	ValidationRetries int `json:"validation_retries,omitempty"`
+	// StateFile is .sureva/source.json after it was moved to the release just
+	// published; StateFileError says why it could not be (the release is still
+	// published, but the next deploy from this directory will not be based on it).
+	StateFile      string `json:"state_file,omitempty"`
+	StateFileError string `json:"state_file_error,omitempty"`
 	// Logs says how to fetch the logs of a deployment that failed.
 	Logs *logsHint `json:"logs,omitempty"`
 }
@@ -80,11 +87,31 @@ VALIDATION / INPUTS
   --org: required organization slug unless a default org is configured.
   --env-id: environment UUID; defaults to the production environment.
   --wait: wait for the deployment to reach a terminal state.
+  --no-base: do not send the recorded base release (see BASE RELEASE); upload
+         without a base and overwrite the latest release on purpose.
   --wait-interval/--wait-timeout: Go duration strings; the interval must be
          positive. The interval also paces the wait for archive validation,
          which always happens; the timeout
          bounds each of the two waits separately. Validation retries (see
          below) and their pauses count against the validation timeout.
+
+BASE RELEASE
+  A directory filled by 'sources pull' records its release in
+  .sureva/source.json. When that record belongs to --app, deploy sends its
+  source id as base_source_id with the upload request, and the platform refuses
+  to publish the archive if that release is no longer the app's latest ready one
+  (so two agents that pulled the same release cannot overwrite each other). No
+  record, a damaged one or another app's: nothing is sent. --no-base sends
+  nothing either, on purpose.
+  Once the new release is ready, deploy rewrites .sureva/source.json to it (its
+  source id, release tag, the sha256 of the stored archive and the time), also in
+  a directory that was never pulled and also when the deployment then fails or
+  times out, because the directory is that release from then on. A record that
+  cannot be written does not fail the command: state_file_error says so and the
+  next deploy from this directory is not based on this release. A rejection,
+  an expired source or a validation timeout leaves the record as it was.
+  Loop for an agent: sources pull -> edit -> deploy; on stale_base pull the latest
+  into a separate directory, reapply the change, deploy from there.
 
 VALIDATION RETRIES
   When validation refuses an archive for a reason on the platform's side (the
@@ -116,14 +143,15 @@ WHAT IS PACKED
   size; the zip is built in a temporary file and removed afterwards.
 
 OUTPUT (stdout JSON)
-  app_id, base_source_id, archive{size_bytes,files,max_bytes,packing,excluded,largest}, source
+  app_id, base_source_id, base_sent, archive{size_bytes,files,max_bytes,packing,excluded,largest}, source
   (the release; see 'sources get', including validation_code and retryable when
   it was rejected), validation_retries (only when 'complete' was repeated),
   deployment and, when the deployment failed,
   logs{command,...} naming the command that fetches its logs. base_source_id is
-  present only when [dir] was filled by 'sources pull' for the same app: it is the
-  release the tree was based on, read from .sureva/source.json; it is reported
-  only and is not sent to the API. On a failure after
+  present only when .sureva/source.json names this app: it is the release the tree
+  was based on; base_sent says whether it went to the API (false with --no-base).
+  state_file is that record after it moved to the release just published, or
+  state_file_error when it could not be written. On a failure after
   the upload the same JSON is printed with what completed so far.
 
 ERRORS (stderr envelope "code"; exit code in parentheses)
@@ -144,6 +172,15 @@ ERRORS (stderr envelope "code"; exit code in parentheses)
                         and false when the API has no attempts left, with
                         details.attempts and details.max_attempts when it said.
   app_source_upload_limit_exceeded (4) the app reached its daily upload limit.
+  stale_base            (1) the release this directory was based on is no longer
+                        the latest, so nothing was published. Not a broken
+                        archive: pull the latest into a separate directory,
+                        reapply the change and deploy again, or pass --no-base to
+                        overwrite on purpose. details.latest_release_tag names it.
+  invalid_base_source_id (4) the recorded base is not a source id (request
+  base_source_not_found (4)  time) or names no source of this app; the record is
+                        unusable. Nothing was uploaded. Run 'sources pull' into a
+                        new directory or pass --no-base. The record is not deleted.
   upload_failed         (1) the storage endpoint refused the archive.
   upload_expired        (1) the upload form expired; run the command again.
   validation_timeout    (1) validation did not finish within --wait-timeout (retries
@@ -169,6 +206,7 @@ ERRORS (stderr envelope "code"; exit code in parentheses)
 	cmd.Flags().String("app", "", "Application ID of an upload-backed app (required)")
 	cmd.Flags().String("env-id", "", "Environment UUID; defaults to the production environment when empty")
 	cmd.Flags().Bool("wait", false, "Wait for the deployment to reach a terminal state before returning")
+	cmd.Flags().Bool("no-base", false, "Do not send the release recorded in .sureva/source.json as the upload's base: overwrite the latest release on purpose")
 	cmd.Flags().Duration("wait-interval", 5*time.Second, "Polling interval as a Go duration, for validation and --wait (e.g. 5s)")
 	cmd.Flags().Duration("wait-timeout", 15*time.Minute, "Maximum wait as a Go duration for validation and, separately, for the deployment (e.g. 15m)")
 	return cmd
@@ -178,6 +216,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	appID, _ := cmd.Flags().GetString("app")
 	envID, _ := cmd.Flags().GetString("env-id")
 	wait, _ := cmd.Flags().GetBool("wait")
+	noBase, _ := cmd.Flags().GetBool("no-base")
 	waitInterval, _ := cmd.Flags().GetDuration("wait-interval")
 	waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
 
@@ -256,7 +295,19 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	defer archive.Remove()
 
-	res = &deployResult{AppID: appID, BaseSourceID: pulledBase(dir, appID), Archive: &archiveSummary{
+	// The release the directory is based on is sent with the upload request so
+	// the platform can refuse the upload when that release is no longer the
+	// latest. --no-base sends nothing: an explicit overwrite.
+	base := pulledBase(dir, appID)
+	baseID := ""
+	if base != nil {
+		baseID = base.SourceID
+	}
+	sendBase := baseID
+	if noBase {
+		sendBase = ""
+	}
+	res = &deployResult{AppID: appID, BaseSourceID: baseID, BaseSent: sendBase != "", Archive: &archiveSummary{
 		SizeBytes: archive.Size,
 		Files:     archive.Files,
 		Packing:   archive.Mode,
@@ -276,7 +327,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return handleAPIError(r, err)
 	}
 
-	upload, err := c.CreateSourceUpload(ctx, orgID, appID)
+	upload, err := c.CreateSourceUpload(ctx, orgID, appID, sendBase)
 	if err != nil {
 		var apiErr *client.APIError
 		// The create endpoint answers a GitHub-backed app with a plain 409 and
@@ -288,6 +339,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 		if ctx.Err() != nil {
 			return interrupted()
+		}
+		if apiErr != nil && sendBase != "" && (apiErr.ServerCode == apiCodeInvalidBase || apiErr.ServerCode == apiCodeBaseNotFound) {
+			return failDetails(unusableBaseMessage(base, apiErr.Message), apiErr.ServerCode, output.ExitValidation, apiErrorDetails(apiErr))
 		}
 		return handleAPIError(r, classifySourceError(err))
 	}
@@ -353,6 +407,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	switch source.Status {
 	case "rejected":
+		if source.ValidationCode != nil && *source.ValidationCode == validationCodeStaleBase {
+			_ = r.Render(res)
+			msg, details := staleBaseFailure(ctx, c, orgID, appID, base, source)
+			return failDetails(msg, "stale_base", output.ExitGeneral, details)
+		}
 		_ = r.Render(res)
 		details := rejectionDetails(source)
 		// Retries are over, either because the CLI stopped repeating a
@@ -365,6 +424,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	case "expired":
 		return failWith(fmt.Sprintf("source %s expired before it could be deployed; run the command again", source.ID), "source_expired", output.ExitGeneral)
 	}
+
+	// The release is published and is the app's latest ready one: the directory
+	// IS that release now, whatever happens to the deployment below, so the
+	// record moves here and not when the deployment succeeds. A failed write does
+	// not fail the command; it is reported in the output.
+	recordPublished(dir, appID, source, res)
 
 	deploy, err := c.TriggerDeployment(ctx, orgID, appID, "", source.ID, envID)
 	if err != nil {
@@ -404,13 +469,13 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// pulledBase returns the release dir was pulled from for this app, or "" when
-// dir was not pulled, the record is unreadable, or it belongs to another app.
-func pulledBase(dir, appID string) string {
+// pulledBase returns the record of the release dir is based on for this app, or
+// nil when dir has none, the record is unreadable, or it belongs to another app.
+func pulledBase(dir, appID string) *sourcebase.Base {
 	if b := sourcebase.Read(dir); b != nil && b.AppID == appID {
-		return b.SourceID
+		return b
 	}
-	return ""
+	return nil
 }
 
 // rejectionReason is why validation refused a source, in the API's words.
