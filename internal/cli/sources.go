@@ -22,6 +22,10 @@ AGENT USAGE
   Inspect one release, including why it was rejected:
     sureva sources get <app-id> <source-id> --org <slug> | jq '.validation_error'
 
+  Fetch the code of an app to work on it (dependencies and environment
+  variables are not in it; see 'sources pull --help'):
+    sureva sources pull <app-id> --org <slug> --dir ./app
+
 STATUS
   pending|validating  not deployable yet
   rejected            validation refused it; see validation_error
@@ -32,6 +36,7 @@ STATUS
 	}
 	sources.AddCommand(newSourcesListCmd())
 	sources.AddCommand(newSourcesGetCmd())
+	sources.AddCommand(newSourcesPullCmd())
 	return sources
 }
 

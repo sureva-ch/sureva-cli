@@ -16,6 +16,7 @@ import (
 	"github.com/sureva-ch/sureva-cli/internal/credentials"
 	"github.com/sureva-ch/sureva-cli/internal/output"
 	"github.com/sureva-ch/sureva-cli/internal/pack"
+	"github.com/sureva-ch/sureva-cli/internal/sourcebase"
 )
 
 // largestEntriesShown is how many archive entries a size refusal names.
@@ -26,10 +27,13 @@ const largestEntriesShown = 5
 // how far the deploy got (the uploaded source, the failed deployment, where its
 // logs are) next to the error envelope on stderr.
 type deployResult struct {
-	AppID      string             `json:"app_id"`
-	Archive    *archiveSummary    `json:"archive,omitempty"`
-	Source     *client.AppSource  `json:"source,omitempty"`
-	Deployment *client.Deployment `json:"deployment,omitempty"`
+	AppID string `json:"app_id"`
+	// BaseSourceID is the release the directory was pulled from, read from
+	// .sureva/source.json. It is reported only: it is not sent to the API.
+	BaseSourceID string             `json:"base_source_id,omitempty"`
+	Archive      *archiveSummary    `json:"archive,omitempty"`
+	Source       *client.AppSource  `json:"source,omitempty"`
+	Deployment   *client.Deployment `json:"deployment,omitempty"`
 	// Logs says how to fetch the logs of a deployment that failed.
 	Logs *logsHint `json:"logs,omitempty"`
 }
@@ -78,7 +82,7 @@ VALIDATION / INPUTS
          bounds each of the two waits separately.
 
 WHAT IS PACKED
-  Always left out, at any depth: node_modules/, .git/ and .env*. Also left out:
+  Always left out, at any depth: node_modules/, .git/, .sureva/ and .env*. Also left out:
   what .gitignore ignores (inside a git work tree the file list comes from git,
   so its rules apply exactly), and what a .surevaignore file in [dir] lists (same
   syntax as .gitignore). Symlinks are skipped, never followed. Paths are stored
@@ -86,9 +90,12 @@ WHAT IS PACKED
   size; the zip is built in a temporary file and removed afterwards.
 
 OUTPUT (stdout JSON)
-  app_id, archive{size_bytes,files,max_bytes,packing,excluded,largest}, source
+  app_id, base_source_id, archive{size_bytes,files,max_bytes,packing,excluded,largest}, source
   (the release; see 'sources get'), deployment and, when the deployment failed,
-  logs{command,...} naming the command that fetches its logs. On a failure after
+  logs{command,...} naming the command that fetches its logs. base_source_id is
+  present only when [dir] was filled by 'sources pull' for the same app: it is the
+  release the tree was based on, read from .sureva/source.json; it is reported
+  only and is not sent to the API. On a failure after
   the upload the same JSON is printed with what completed so far.
 
 ERRORS (stderr envelope "code"; exit code in parentheses)
@@ -197,7 +204,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	defer archive.Remove()
 
-	res = &deployResult{AppID: appID, Archive: &archiveSummary{
+	res = &deployResult{AppID: appID, BaseSourceID: pulledBase(dir, appID), Archive: &archiveSummary{
 		SizeBytes: archive.Size,
 		Files:     archive.Files,
 		Packing:   archive.Mode,
@@ -321,6 +328,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return &ExitError{Code: output.ExitGeneral}
 	}
 	return nil
+}
+
+// pulledBase returns the release dir was pulled from for this app, or "" when
+// dir was not pulled, the record is unreadable, or it belongs to another app.
+func pulledBase(dir, appID string) string {
+	if b := sourcebase.Read(dir); b != nil && b.AppID == appID {
+		return b.SourceID
+	}
+	return ""
 }
 
 func tooLargeMessage(a *pack.Archive, max int64) string {

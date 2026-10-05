@@ -2,8 +2,24 @@ package client
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"time"
 )
+
+// errEmptySourceID is returned for a blank source id, which would otherwise
+// turn the request into a different endpoint (the list).
+var errEmptySourceID = errors.New("source id must not be empty")
+
+// sourcePath is the path of one source. The id is user-supplied, so it is
+// escaped as a single path segment: "/" or "?" in it cannot reach another
+// endpoint.
+func sourcePath(orgID, appID, sourceID string) (string, error) {
+	if sourceID == "" {
+		return "", errEmptySourceID
+	}
+	return sourcesPath(orgID, appID) + "/" + url.PathEscape(sourceID), nil
+}
 
 // AppSource is one uploaded release of an upload-backed app. Fields mirror the
 // cloud-api AppSource view (models.AppSource plus the computed available key),
@@ -29,7 +45,7 @@ type AppSource struct {
 }
 
 func sourcesPath(orgID, appID string) string {
-	return "/v1/orgs/" + orgID + "/apps/" + appID + "/sources"
+	return "/v1/orgs/" + url.PathEscape(orgID) + "/apps/" + url.PathEscape(appID) + "/sources"
 }
 
 // ListSources returns the source releases of an upload-backed app.
@@ -43,8 +59,12 @@ func (c *Client) ListSources(ctx context.Context, orgID, appID string) ([]AppSou
 
 // GetSource returns one source release of an upload-backed app.
 func (c *Client) GetSource(ctx context.Context, orgID, appID, sourceID string) (*AppSource, error) {
+	p, err := sourcePath(orgID, appID, sourceID)
+	if err != nil {
+		return nil, err
+	}
 	var resp AppSource
-	if err := c.get(ctx, sourcesPath(orgID, appID)+"/"+sourceID, &resp); err != nil {
+	if err := c.get(ctx, p, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -89,8 +109,44 @@ func (c *Client) CreateSourceUpload(ctx context.Context, orgID, appID string) (*
 // CompleteSource tells the platform the archive has been uploaded, which starts
 // its validation.
 func (c *Client) CompleteSource(ctx context.Context, orgID, appID, sourceID string) (*SourceCompletion, error) {
+	p, err := sourcePath(orgID, appID, sourceID)
+	if err != nil {
+		return nil, err
+	}
 	var resp SourceCompletion
-	if err := c.post(ctx, sourcesPath(orgID, appID)+"/"+sourceID+"/complete", nil, &resp); err != nil {
+	if err := c.post(ctx, p+"/complete", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// LatestSource is the sourceID that selects the app's newest ready release.
+const LatestSource = "latest"
+
+// SourceDownload is what GET .../sources/{id}/download answers with: a
+// short-lived presigned URL for one release archive and the facts needed to
+// verify it. SizeBytes and SHA256 describe the object at URL.
+type SourceDownload struct {
+	// URL is a credential: it grants a read of the archive until ExpiresAt. It
+	// must never be printed or logged.
+	URL        string    `json:"url"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	SourceID   string    `json:"source_id"`
+	ReleaseTag string    `json:"release_tag"`
+	SizeBytes  *int64    `json:"size_bytes,omitempty"`
+	SHA256     *string   `json:"sha256,omitempty"`
+}
+
+// DownloadSource asks for a download target for one release of an upload-backed
+// app; sourceID may be LatestSource. The archive itself is fetched from storage
+// with DownloadSourceArchive.
+func (c *Client) DownloadSource(ctx context.Context, orgID, appID, sourceID string) (*SourceDownload, error) {
+	p, err := sourcePath(orgID, appID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	var resp SourceDownload
+	if err := c.get(ctx, p+"/download", &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

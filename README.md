@@ -298,6 +298,7 @@ archive is a release with the tag `src-<seq>` and an id.
 ```bash
 sureva sources list <app-id> --org <slug>                # releases, newest first
 sureva sources get <app-id> <source-id> --org <slug>     # one release
+sureva sources pull <app-id> --org <slug> --dir ./app    # download the code
 ```
 
 Each row carries `status` (`pending` | `validating` | `rejected` | `ready` |
@@ -305,6 +306,86 @@ Each row carries `status` (`pending` | `validating` | `rejected` | `ready` |
 `available` and, for a rejected archive, `validation_error`. `available: false`
 on a `ready` release means its stored version is gone and it can no longer be
 deployed.
+
+### Pull the code of an upload-backed app
+
+`sources pull` is how a developer or a coding agent gets the code of an
+upload-backed app to work on, the counterpart of `git clone` for a GitHub-backed
+one:
+
+```bash
+sureva sources pull <app-id> --org <slug> --dir ./app                    # latest ready release
+sureva sources pull <app-id> --org <slug> --dir ./app --source-id <id>   # a specific release
+```
+
+The API hands out a short-lived download link; the archive is fetched straight
+from storage with a client that never carries your API token, its `sha256` is
+checked against the one the API reported, and only then is anything extracted.
+`--dir` defaults to the current directory and is created when missing; a
+`--dir` that is a symlink is resolved and the files are written under the
+resolved path. It must be empty (nothing in it, or only the `.sureva/` directory of an earlier pull)
+unless you pass `--force`; with `--force` files in the archive overwrite files
+of the same path and files that are not in the archive are left alone, so the
+directory can keep leftovers from an older release. Into a new or empty
+directory the tree is built aside and moved into place only when complete
+(leftover `.sureva-pull-*` staging directories of a killed pull are removed).
+With `--force`, every path is checked against what exists before anything is
+written: a directory where the archive has a file, or the reverse, is refused
+and names the path; nothing is removed to make room.
+
+Extraction does not trust the archive: absolute paths, `..` or `.` segments,
+backslashes, NUL bytes, drive letters, symlinks and every other non-regular
+entry are refused (nothing is extracted), as are archives over 50,000 entries or
+1 GiB uncompressed. Names that differ only in letter case, a file together with
+a path beneath it, and names Windows cannot hold (a trailing dot or space,
+control characters, `:`, any of `<>"|?*`, device names such as `CON`, `NUL`,
+`COM1`, `LPT1`) are refused on every platform, so one archive behaves the same
+everywhere. No file is written through a symlink already in `--dir`.
+Only permission bits are applied, never setuid, setgid or sticky, and group and
+other never get write access.
+
+**After a pull, know what the tree is.** It is what the platform stored, not
+what was uploaded:
+
+- `node_modules/`, `.git/` and `.env*` are never in it. Install dependencies
+  (for example `npm ci`), and get environment variables with `sureva env get`;
+  there is no `.env` file to copy.
+- A single wrapper directory the upload had was removed, so the files sit at the
+  top of `--dir`.
+- File permission bits are kept; releases stored before that was recorded
+  extract without the executable bit.
+
+A successful pull writes `<dir>/.sureva/source.json` (`app_id`, `source_id`,
+`release_tag`, `sha256`, `pulled_at`): the release the tree is based on.
+The record is written atomically and never through a symlink: if `.sureva` is
+not a plain directory, or `source.json` is not a regular file, the pull is
+refused before anything is downloaded. In an empty `--dir` only `source.json`
+is replaced; the rest of an existing `.sureva/` stays. `deploy` never uploads
+`.sureva/`, and reports the recorded release as
+`base_source_id` in its JSON output. It is not sent to the API.
+
+stdout is one JSON object: `app_id`, `source_id`, `release_tag`, `dir`, `files`,
+`bytes` (uncompressed), `archive_bytes`, `sha256` and `state_file`. The download
+link is never printed. Failures an agent should tell apart, by the envelope
+`code`:
+
+| `code` | Exit | Meaning |
+|---|---|---|
+| `auth_error` | 2 | credentials missing or expired |
+| `no_source` | 3 | the app has no ready release yet: start a new project and publish it with `deploy`; not a failure |
+| `not_found` | 3 | unknown app or unknown `--source-id` |
+| `dir_not_empty` | 4 | `--dir` already holds files; use `--force` |
+| `github_backed_app` | 4 | the app's code is its GitHub repository: clone it (named in the message when known) |
+| `validation_error` | 4 | bad arguments; `--dir` is not a directory; or, with `--force`, a path conflicts with what exists (file versus directory) or `.sureva` is a link; nothing was written |
+| `source_not_ready` | 1 | the release is not ready (validating or rejected) |
+| `source_expired` | 1 | the release is no longer stored |
+| `checksum_mismatch` | 1 | the download does not match the reported `sha256`; nothing was extracted |
+| `unsafe_archive` | 1 | the archive was refused; see the message |
+| `download_expired` | 1 | the download link ran out; run the command again |
+| `download_failed` | 1 | storage refused the download or sent more than the reported size |
+| `extract_failed` | 1 | writing the files failed; the message says whether some were written |
+| `interrupted` | 1 | stopped by SIGINT or SIGTERM; the temporary archive was removed |
+| `network_error` | 5 | no HTTP response |
 
 ### Deploy a local directory
 
@@ -323,8 +404,8 @@ and the timeout bounds the validation wait and the deployment wait separately.
 A GitHub-backed app is refused up front (`github_backed_app`): use
 `deploys trigger` for it.
 
-What is packed: `node_modules/`, `.git/` and `.env*` are always left out, at any
-depth. So is everything `.gitignore` ignores (inside a git work tree the file
+What is packed: `node_modules/`, `.git/`, `.sureva/` and `.env*` are always left
+out, at any depth. So is everything `.gitignore` ignores (inside a git work tree the file
 list comes from `git ls-files`, so git's own rules apply; elsewhere `.gitignore`
 files are read during the walk) and everything a `.surevaignore` file in the
 directory lists, which uses the `.gitignore` syntax. Symlinks are skipped, never
@@ -333,7 +414,8 @@ the archive size; the zip is built in a temporary file and removed afterwards.
 An archive over the limit the API reports for the app is refused before the
 upload, naming its largest entries.
 
-stdout is one JSON object: `app_id`, `archive`, `source` (the release, as in
+stdout is one JSON object: `app_id`, `base_source_id` (only for a directory
+filled by `sources pull`), `archive`, `source` (the release, as in
 `sources get`) and `deployment`. After a failure that follows the upload, the
 same object is printed with what completed, next to the error envelope on
 stderr; after a failed deployment it also carries `logs.command`, the `sureva

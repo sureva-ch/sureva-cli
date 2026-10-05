@@ -273,6 +273,14 @@ func TestPack_AlwaysExcludedNames(t *testing.T) {
 		{"node_modules mixed", "Node_Modules/a.js"},
 		{"node_modules nested", "pkg/node_modules/a.js"},
 		{"git file", "sub/.git"},
+		// The state `sureva sources pull` leaves behind is never uploaded.
+		{"sureva state", ".sureva/source.json"},
+		{"sureva state upper", ".SUREVA/source.json"},
+		{"sureva state nested", "pkg/.Sureva/source.json"},
+		// The staging directory a killed pull can leave behind.
+		{"pull staging", ".sureva-pull-123456/a.js"},
+		{"pull staging upper", ".SUREVA-PULL-1/a.js"},
+		{"pull staging nested", "pkg/.sureva-pull-9/a.js"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
