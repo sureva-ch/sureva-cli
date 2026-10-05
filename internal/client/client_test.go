@@ -255,7 +255,7 @@ func TestNoRetryOnPOST(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 
-	_, err := c.TriggerDeployment(context.Background(), "org-1", "app-1", "v1.0.0", "")
+	_, err := c.TriggerDeployment(context.Background(), "org-1", "app-1", "v1.0.0", "", "")
 	if err == nil {
 		t.Fatal("expected error from 5xx POST")
 	}
@@ -567,7 +567,7 @@ func TestTriggerDeployment_Success(t *testing.T) {
 		})
 	})
 
-	dep, err := c.TriggerDeployment(context.Background(), "org-1", "app-1", "v1.0.0", "")
+	dep, err := c.TriggerDeployment(context.Background(), "org-1", "app-1", "v1.0.0", "", "")
 	if err != nil {
 		t.Fatalf("TriggerDeployment: %v", err)
 	}

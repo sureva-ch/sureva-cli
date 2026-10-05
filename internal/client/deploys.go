@@ -18,6 +18,7 @@ type Deployment struct {
 
 type triggerDeploymentRequest struct {
 	ReleaseTag    string `json:"release_tag,omitempty"`
+	SourceID      string `json:"source_id,omitempty"`
 	EnvironmentID string `json:"environment_id,omitempty"`
 }
 
@@ -31,11 +32,15 @@ func (c *Client) ListDeployments(ctx context.Context, orgID, appID string) ([]De
 }
 
 // TriggerDeployment starts a new deployment asynchronously and returns the pending
-// deployment object. releaseTag is required for api and sse app types. Pass an empty
+// deployment object. releaseTag selects the release of a GitHub-backed app and is
+// required for api and sse app types; sourceID selects the release of an
+// upload-backed app, which deploys its latest ready release when empty. The API
+// rejects the one that does not match the app's source type. Pass an empty
 // environmentID to use the production environment.
-func (c *Client) TriggerDeployment(ctx context.Context, orgID, appID, releaseTag, environmentID string) (*Deployment, error) {
+func (c *Client) TriggerDeployment(ctx context.Context, orgID, appID, releaseTag, sourceID, environmentID string) (*Deployment, error) {
 	req := triggerDeploymentRequest{
 		ReleaseTag:    releaseTag,
+		SourceID:      sourceID,
 		EnvironmentID: environmentID,
 	}
 	var resp Deployment

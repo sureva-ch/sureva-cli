@@ -156,6 +156,11 @@ VALIDATION / INPUTS
   --team: team slug or ID; required when the org has multiple teams.
   --wait-interval/--wait-timeout: Go duration strings (examples: 1s, 30s, 5m).
 
+--use-existing-repo only applies to an org with a connected GitHub organization.
+An org without one creates upload-backed apps (source_type "upload"): there is
+no repository, and releases are listed with 'sources list' and deployed with
+'deploys trigger --source-id'.
+
 --wait blocks until the domain becomes active (useful for CI pipelines).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			name, _ := cmd.Flags().GetString("name")
@@ -282,7 +287,7 @@ VALIDATION / INPUTS
 	cmd.Flags().String("region", "", "AWS region: one of eu-central-1|eu-central-2 (required)")
 	cmd.Flags().String("runtime", "", "Runtime: one of nodejs24|python314|go126; required when --type is not web")
 	cmd.Flags().String("team", "", "Team slug or ID; required when org has multiple teams, auto-selected when exactly one team exists")
-	cmd.Flags().Bool("use-existing-repo", false, "Create the app from an existing GitHub repository of the same name instead of failing; its contents are left untouched and no template is committed")
+	cmd.Flags().Bool("use-existing-repo", false, "Create the app from an existing GitHub repository of the same name instead of failing; its contents are left untouched and no template is committed. Only for orgs with a connected GitHub organization")
 	cmd.Flags().Bool("wait", false, "Wait for domain to become active before returning")
 	cmd.Flags().Duration("wait-interval", 5*time.Second, "Polling interval as a Go duration when --wait is active (e.g. 5s)")
 	cmd.Flags().Duration("wait-timeout", 10*time.Minute, "Maximum wait as a Go duration for domain activation (e.g. 10m)")

@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `apps get`, `apps list` and `apps create` show `source_type` (`github` or
+  `upload`) when the API sends it. The read endpoints do not send it until
+  sureva-ch/cloud-api#345 ships, so an app without the field is unknown, not
+  GitHub-backed: the key is omitted in JSON, and in the table the cell is
+  blank, or the column is absent when no listed app has the field.
+- `sureva sources list <app-id>` and `sureva sources get <app-id> <source-id>`
+  show the releases of an upload-backed app: status, release tag, size, sha256,
+  availability and, for a rejected archive, its validation error. They appear
+  in `sureva --help --json`.
+- `deploys trigger --source-id <id>` deploys a release of an upload-backed app,
+  which is also how to roll one back. It is mutually exclusive with `--tag`,
+  which is now documented as applying to GitHub-backed apps only. A failed
+  deploy of a release is told apart in the stderr envelope: `source_expired`
+  (410, the release is no longer stored) and `source_not_ready` (409), next to
+  the existing `deploy_failed` for a failed deployment. All still exit 1; the
+  root `EXIT CODES` help names them.
+- `apps create --help` states that `--use-existing-repo` only applies to an org
+  with a connected GitHub organization.
+
 ### Fixed
 
 - The README's install instructions now work. The quickstart told readers to

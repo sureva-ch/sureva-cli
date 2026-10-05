@@ -3,6 +3,7 @@ package cli_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/sureva-ch/sureva-cli/internal/output"
@@ -373,5 +374,134 @@ func TestLogs_EmptyOn204(t *testing.T) {
 
 	if got := exitCode(err); got != output.ExitOK {
 		t.Errorf("logs 204: want exit 0, got %d", got)
+	}
+}
+
+// ---- deploys trigger: upload-backed apps ----
+
+const deploymentsPath = "/v1/orgs/" + testOrgID + "/apps/" + testAppID + "/deployments"
+
+func triggerStub(t *testing.T, status int, body string, gotBody *map[string]any, calls *int) *http.ServeMux {
+	t.Helper()
+	mux := deploys_mux()
+	mux.HandleFunc(deploymentsPath, func(w http.ResponseWriter, r *http.Request) {
+		*calls++
+		_ = json.NewDecoder(r.Body).Decode(gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	})
+	return mux
+}
+
+func TestDeploysTrigger_SourceID_SendsSourceID(t *testing.T) {
+	var sent map[string]any
+	var calls int
+	mux := triggerStub(t, http.StatusCreated, `{"id":"`+testDeployID+`","app_id":"`+testAppID+`","status":"pending","release_tag":"src-3"}`, &sent, &calls)
+	srv := newTestServer(t, mux)
+	outBuf, _, exec := newTestRoot(t, srv)
+
+	err := exec("deploys", "trigger", testAppID, "--org", testOrgSlug, "--source-id", "src-id-3")
+
+	if got := exitCode(err); got != output.ExitOK {
+		t.Fatalf("want exit 0, got %d", got)
+	}
+	if sent["source_id"] != "src-id-3" {
+		t.Errorf("source_id sent = %v, want src-id-3 (body: %v)", sent["source_id"], sent)
+	}
+	if _, present := sent["release_tag"]; present {
+		t.Errorf("release_tag must not be sent with --source-id (body: %v)", sent)
+	}
+	if !strings.Contains(outBuf.String(), "src-3") {
+		t.Errorf("stdout missing the deployment: %s", outBuf)
+	}
+}
+
+func TestDeploysTrigger_NeitherFlag_SendsNeither(t *testing.T) {
+	var sent map[string]any
+	var calls int
+	mux := triggerStub(t, http.StatusCreated, `{"id":"`+testDeployID+`","status":"pending"}`, &sent, &calls)
+	srv := newTestServer(t, mux)
+	_, _, exec := newTestRoot(t, srv)
+
+	if got := exitCode(exec("deploys", "trigger", testAppID, "--org", testOrgSlug)); got != output.ExitOK {
+		t.Fatalf("want exit 0, got %d", got)
+	}
+	if _, present := sent["source_id"]; present {
+		t.Errorf("source_id sent without --source-id: %v", sent)
+	}
+	if _, present := sent["release_tag"]; present {
+		t.Errorf("release_tag sent without --tag: %v", sent)
+	}
+}
+
+func TestDeploysTrigger_TagAndSourceID_MutuallyExclusive(t *testing.T) {
+	var sent map[string]any
+	var calls int
+	mux := triggerStub(t, http.StatusCreated, `{}`, &sent, &calls)
+	srv := newTestServer(t, mux)
+	_, errBuf, exec := newTestRoot(t, srv)
+
+	err := exec("deploys", "trigger", testAppID, "--org", testOrgSlug, "--tag", "v1.0.0", "--source-id", "src-id-3")
+
+	if got := exitCode(err); got != output.ExitValidation {
+		t.Errorf("want exit %d, got %d", output.ExitValidation, got)
+	}
+	if calls != 0 {
+		t.Errorf("a request was sent (%d calls); the conflict must be caught before any request", calls)
+	}
+	var env map[string]any
+	if jsonErr := json.NewDecoder(errBuf).Decode(&env); jsonErr != nil {
+		t.Fatalf("stderr not JSON: %v\nstderr: %s", jsonErr, errBuf)
+	}
+	if env["code"] != "validation_error" {
+		t.Errorf("code = %v, want validation_error", env["code"])
+	}
+	if msg, _ := env["error"].(string); !strings.Contains(msg, "--tag") || !strings.Contains(msg, "--source-id") {
+		t.Errorf("message should name both flags: %q", msg)
+	}
+}
+
+func TestDeploysTrigger_SourceErrors_AreDistinguishable(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   int
+		message  string
+		wantExit int
+		wantCode string
+	}{
+		{"expired", http.StatusGone, "this source archive has expired and is no longer stored; upload the source again to deploy it", output.ExitGeneral, "source_expired"},
+		{"not ready", http.StatusConflict, "this source archive is rejected and cannot be deployed; only a ready archive can", output.ExitGeneral, "source_not_ready"},
+		{"deploy in progress", http.StatusConflict, "a deployment is already in progress for this app and environment", output.ExitGeneral, "api_error"},
+		{"unknown release", http.StatusNotFound, "source not found", output.ExitNotFound, "not_found"},
+		{"tag on upload app", http.StatusBadRequest, "release_tag is not accepted for an upload-backed app", output.ExitValidation, "validation_error"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent map[string]any
+			var calls int
+			body, _ := json.Marshal(map[string]string{"error": tc.message})
+			srv := newTestServer(t, triggerStub(t, tc.status, string(body), &sent, &calls))
+			_, errBuf, exec := newTestRoot(t, srv)
+
+			err := exec("deploys", "trigger", testAppID, "--org", testOrgSlug, "--source-id", "src-id-3")
+
+			if got := exitCode(err); got != tc.wantExit {
+				t.Errorf("exit = %d, want %d", got, tc.wantExit)
+			}
+			var env map[string]any
+			if jsonErr := json.NewDecoder(errBuf).Decode(&env); jsonErr != nil {
+				t.Fatalf("stderr not JSON: %v\nstderr: %s", jsonErr, errBuf)
+			}
+			if env["code"] != tc.wantCode {
+				t.Errorf("code = %v, want %s", env["code"], tc.wantCode)
+			}
+			if env["http_status"] != float64(tc.status) {
+				t.Errorf("http_status = %v, want %d", env["http_status"], tc.status)
+			}
+			if env["error"] != tc.message {
+				t.Errorf("error = %v, want the API message unchanged", env["error"])
+			}
+		})
 	}
 }

@@ -250,6 +250,12 @@ sureva apps delete <app-id> --org <slug> --yes
 ```
 
 **App types**: `web` | `web-ssr` | `api` | `sse`
+
+**Source type**: an app is either GitHub-backed (`source_type: "github"`) or
+upload-backed (`"upload"`, an org without a connected GitHub organization). The
+field is omitted when the API does not report it; treat that as unknown, not as
+`github`. `--use-existing-repo` only applies to GitHub-connected orgs.
+
 **Runtimes** (required for non-web types): `nodejs24` | `python314` | `go126`
 **Regions**: `eu-central-1` | `eu-central-2`
 
@@ -284,6 +290,22 @@ sureva services kvs tables delete <app-id> sessions --org <slug> --yes
 KVS is available for `api`, `web-ssr`, and `sse` apps. Plaintext KVS tokens are
 shown only on enable/create/rotate responses; store them immediately.
 
+### Sources (upload-backed apps)
+
+An upload-backed app has releases instead of a GitHub repository: each accepted
+archive is a release with the tag `src-<seq>` and an id.
+
+```bash
+sureva sources list <app-id> --org <slug>                # releases, newest first
+sureva sources get <app-id> <source-id> --org <slug>     # one release
+```
+
+Each row carries `status` (`pending` | `validating` | `rejected` | `ready` |
+`expired`), `release_tag`, `size_bytes`, `sha256`, `seq`, `created_at`,
+`available` and, for a rejected archive, `validation_error`. `available: false`
+on a `ready` release means its stored version is gone and it can no longer be
+deployed.
+
 ### Deployments
 
 ```bash
@@ -293,9 +315,27 @@ sureva deploys trigger <app-id> --org <slug> --tag v1.2.3 --env-id <uuid>
 # Trigger and wait for terminal state (success|failed|cancelled)
 sureva deploys trigger <app-id> --org <slug> --tag v1.2.3 --wait
 
+# Upload-backed app: deploy a release by id (also how you roll back).
+# With neither --tag nor --source-id the latest ready release is deployed.
+sureva deploys trigger <app-id> --org <slug> --source-id <source-id>
+
 sureva deploys list <app-id> --org <slug>
 sureva deploys status <app-id> <deploy-id> --org <slug>
 ```
+
+`--tag` selects a release of a GitHub-backed app and is rejected for an
+upload-backed one; `--source-id` is the reverse. They are mutually exclusive
+(usage error, exit 4, no request sent). The API's answer is passed through, and
+exit 1 alone does not say which failure it was, so read `code` in the stderr
+envelope:
+
+| `code` | HTTP | Meaning |
+|--------|------|---------|
+| `source_expired` | 410 | The release is no longer stored; upload the source again |
+| `source_not_ready` | 409 | The release is pending, validating, rejected or expired |
+| `not_found` | 404 | Unknown release, or no ready release to deploy (exit 3) |
+| `validation_error` | 400 | `--tag` on an upload-backed app or `--source-id` on a GitHub-backed one (exit 4) |
+| `deploy_failed` | n/a | With `--wait`: the deployment itself failed or was cancelled |
 
 **`--wait` flags** (available on `apps create` and `deploys trigger`):
 
