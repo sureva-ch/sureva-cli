@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `apps create --wait` now prints the created app on stdout when the wait ends
+  in `wait_timeout` or `domain_failed` (the last polled state, or the create
+  response if no poll finished). The stderr error envelope and exit code 1 are
+  unchanged, so the app id no longer has to be looked up with `apps list`
+  (sureva-ch/sureva#89).
+- The `apps create` help and README now state that `--wait` blocks until the
+  app's `domain_status` is `active`, which happens when the first deployment
+  finishes (sureva-ch/sureva#89).
+
 ## [0.4.0] - 2026-10-06
 
 ### Added
