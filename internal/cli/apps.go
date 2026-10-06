@@ -161,7 +161,11 @@ An org without one creates upload-backed apps (source_type "upload"): there is
 no repository, and releases are listed with 'sources list' and deployed with
 'deploys trigger --source-id'.
 
---wait blocks until the domain becomes active (useful for CI pipelines).`,
+--wait blocks until the app's domain_status is "active" (useful for CI
+pipelines). For a web app that happens when its first deployment finishes, so
+the wait covers that build, not only the creation call. On wait_timeout or
+domain_failed the created app is still printed on stdout, with its id, and the
+command then exits 1 with the error on stderr.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			name, _ := cmd.Flags().GetString("name")
 			appType, _ := cmd.Flags().GetString("type")
@@ -240,6 +244,9 @@ no repository, and releases are listed with 'sources list' and deployed with
 				return handleAPIError(r, err)
 			}
 
+			configPath := configFlagOrDefault(cmd)
+			suffix := credentials.DomainSuffixFromPath(configPath)
+
 			if wait {
 				var finalApp *client.App
 				pollErr := pollUntil(cmd.Context(), waitInterval, waitTimeout, func(ctx context.Context) (bool, error) {
@@ -257,7 +264,20 @@ no repository, and releases are listed with 'sources list' and deployed with
 					return false, nil
 				})
 				if pollErr != nil {
+					// The app exists even when the wait fails. Print the last
+					// polled state (or the create response when no poll finished)
+					// so the caller does not have to look its id up with
+					// 'apps list'. Stdout and stderr are separate streams, so the
+					// error envelope below is unchanged.
+					printCreated := func() {
+						shown := finalApp
+						if shown == nil {
+							shown = app
+						}
+						_ = r.Render(newAppView(shown, suffix))
+					}
 					if errors.Is(pollErr, errWaitTimeout) {
+						printCreated()
 						_ = r.RenderError(
 							fmt.Sprintf("timed out waiting for domain to become active; check status with 'apps get %s --org <slug>'", app.ID),
 							"wait_timeout",
@@ -266,6 +286,7 @@ no repository, and releases are listed with 'sources list' and deployed with
 						return &ExitError{Code: output.ExitGeneral}
 					}
 					if errors.Is(pollErr, errDomainFailed) {
+						printCreated()
 						_ = r.RenderError(
 							fmt.Sprintf("domain provisioning failed for app %s; check status with 'apps get %s --org <slug>'", app.ID, app.ID),
 							"domain_failed",
@@ -278,8 +299,6 @@ no repository, and releases are listed with 'sources list' and deployed with
 				app = finalApp
 			}
 
-			configPath := configFlagOrDefault(cmd)
-			suffix := credentials.DomainSuffixFromPath(configPath)
 			if err := r.Render(newAppView(app, suffix)); err != nil {
 				return &ExitError{Code: output.ExitGeneral}
 			}
@@ -293,7 +312,7 @@ no repository, and releases are listed with 'sources list' and deployed with
 	cmd.Flags().String("runtime", "", "Runtime: one of nodejs24|python314|go126; required when --type is not web")
 	cmd.Flags().String("team", "", "Team slug or ID; required when org has multiple teams, auto-selected when exactly one team exists")
 	cmd.Flags().Bool("use-existing-repo", false, "Create the app from an existing GitHub repository of the same name instead of failing; its contents are left untouched and no template is committed. Only for orgs with a connected GitHub organization")
-	cmd.Flags().Bool("wait", false, "Wait for domain to become active before returning")
+	cmd.Flags().Bool("wait", false, "Block until the app's domain_status is active (when the first deployment finishes); on timeout or failure the created app is still printed and the command exits 1")
 	cmd.Flags().Duration("wait-interval", 5*time.Second, "Polling interval as a Go duration when --wait is active (e.g. 5s)")
 	cmd.Flags().Duration("wait-timeout", 10*time.Minute, "Maximum wait as a Go duration for domain activation (e.g. 10m)")
 	return cmd

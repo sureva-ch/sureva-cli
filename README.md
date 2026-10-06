@@ -270,12 +270,18 @@ sureva apps get <app-id> --org <slug>  # get app details (includes composed url 
 sureva apps create --name my-app --type web --region eu-central-1 --org <slug>
 sureva apps create --name my-api --type api --runtime nodejs24 --region eu-central-1 --team <slug> --org <slug>
 
-# Create and wait for domain to become active
+# Create and wait until the app's domain_status is active
 sureva apps create --name my-app --type web --region eu-central-1 --org <slug> --wait
 
 # Delete an app (async teardown — --yes required)
 sureva apps delete <app-id> --org <slug> --yes
 ```
+
+`--wait` blocks until the app's `domain_status` is `active`, which happens when
+its first deployment finishes. If the wait ends in `wait_timeout` or
+`domain_failed`, the app that was created is still printed on stdout (the last
+polled state, or the create response if no poll finished) and the command exits
+1, so its `id` is available without `apps list`.
 
 **App types**: `web` | `web-ssr` | `api` | `sse`
 
@@ -611,11 +617,11 @@ envelope:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--wait` | false | Block until terminal state |
+| `--wait` | false | Block until terminal state; for `apps create`, until `domain_status` is `active` (when the first deployment finishes) |
 | `--wait-interval` | 5s | Polling interval; must be positive (`validation_error`, exit 4, otherwise) |
 | `--wait-timeout` | 10m (create) / 15m (deploys) | Max wait time |
 
-Timeout exits 1 with `code: "wait_timeout"`. Non-success terminal exits 1 with `code: "domain_failed"` or `"deploy_failed"`.
+Timeout exits 1 with `code: "wait_timeout"`. Non-success terminal exits 1 with `code: "domain_failed"` or `"deploy_failed"`. For `apps create`, stdout carries the app JSON even when the command exits 1 for `wait_timeout` or `domain_failed`; the error envelope stays on stderr.
 
 ### Logs
 

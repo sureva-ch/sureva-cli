@@ -520,11 +520,22 @@ func TestAppsCreate_Wait_DomainFailed_ExitGeneral(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"app-new","org_id":"org-1","name":"my-app","type":"web","subdomain":"my-app","domain_status":"failed","is_active":false,"created_at":"2024-01-01T00:00:00Z"}`))
 	})
 	srv := newTestServer(t, mux)
-	_, errBuf, exec := newTestRoot(t, srv)
+	outBuf, errBuf, exec := newTestRoot(t, srv)
 
 	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
 		"--wait", "--wait-interval", "1ms", "--wait-timeout", "5s")
 
+	// The created app is printed on stdout in its last polled state.
+	var app map[string]any
+	if jsonErr := json.NewDecoder(outBuf).Decode(&app); jsonErr != nil {
+		t.Fatalf("wait domain failed: stdout not JSON: %v\noutput: %s", jsonErr, outBuf)
+	}
+	if id, _ := app["id"].(string); id != "app-new" {
+		t.Errorf("wait domain failed: want app id app-new on stdout, got %q", id)
+	}
+	if ds, _ := app["domain_status"].(string); ds != "failed" {
+		t.Errorf("wait domain failed: want domain_status failed on stdout, got %q", ds)
+	}
 	if got := exitCode(err); got != output.ExitGeneral {
 		t.Errorf("wait domain failed: want exit %d, got %d; stderr: %s", output.ExitGeneral, got, errBuf)
 	}
@@ -551,12 +562,20 @@ func TestAppsCreate_Wait_Timeout_ExitGeneral(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"app-new","org_id":"org-1","name":"my-app","type":"web","subdomain":"my-app","domain_status":"pending","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`))
 	})
 	srv := newTestServer(t, mux)
-	_, errBuf, exec := newTestRoot(t, srv)
+	outBuf, errBuf, exec := newTestRoot(t, srv)
 
 	// 1ms interval, 10ms timeout → forces timeout quickly.
 	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
 		"--wait", "--wait-interval", "1ms", "--wait-timeout", "10ms")
 
+	// The created app is printed on stdout in its last polled state.
+	var app map[string]any
+	if jsonErr := json.NewDecoder(outBuf).Decode(&app); jsonErr != nil {
+		t.Fatalf("wait timeout: stdout not JSON: %v\noutput: %s", jsonErr, outBuf)
+	}
+	if id, _ := app["id"].(string); id != "app-new" {
+		t.Errorf("wait timeout: want app id app-new on stdout, got %q", id)
+	}
 	if got := exitCode(err); got != output.ExitGeneral {
 		t.Errorf("wait timeout: want exit %d, got %d; stderr: %s", output.ExitGeneral, got, errBuf)
 	}
@@ -566,6 +585,44 @@ func TestAppsCreate_Wait_Timeout_ExitGeneral(t *testing.T) {
 	}
 	if code, _ := env["code"].(string); code != "wait_timeout" {
 		t.Errorf("wait timeout: want code wait_timeout, got %q", code)
+	}
+}
+
+// TestAppsCreate_Wait_TimeoutBeforeFirstPoll_PrintsCreatedApp covers a wait that
+// expires before any poll completes: stdout falls back to the create response.
+func TestAppsCreate_Wait_TimeoutBeforeFirstPoll_PrintsCreatedApp(t *testing.T) {
+	const oneTeam = `[{"id":"team-1","org_id":"org-1","slug":"engineers","name":"Engineers","is_system":false,"is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
+	mux := appsCreateMux("acme", "org-1", oneTeam)
+	mux.HandleFunc("/v1/orgs/org-1/apps", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"app-new","org_id":"org-1","name":"my-app","type":"web","subdomain":"my-app","domain_status":"pending","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`))
+	})
+	mux.HandleFunc("/v1/orgs/org-1/apps/app-new", func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("poll must not run: the timeout is shorter than the interval")
+	})
+	srv := newTestServer(t, mux)
+	outBuf, errBuf, exec := newTestRoot(t, srv)
+
+	err := exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
+		"--wait", "--wait-interval", "1h", "--wait-timeout", "10ms")
+
+	var app map[string]any
+	if jsonErr := json.NewDecoder(outBuf).Decode(&app); jsonErr != nil {
+		t.Fatalf("timeout before first poll: stdout not JSON: %v\noutput: %s", jsonErr, outBuf)
+	}
+	if id, _ := app["id"].(string); id != "app-new" {
+		t.Errorf("timeout before first poll: want app id app-new on stdout, got %q", id)
+	}
+	if got := exitCode(err); got != output.ExitGeneral {
+		t.Errorf("timeout before first poll: want exit %d, got %d", output.ExitGeneral, got)
+	}
+	var env map[string]any
+	if jsonErr := json.NewDecoder(errBuf).Decode(&env); jsonErr != nil {
+		t.Fatalf("timeout before first poll: stderr not JSON: %v\nstderr: %s", jsonErr, errBuf)
+	}
+	if code, _ := env["code"].(string); code != "wait_timeout" {
+		t.Errorf("timeout before first poll: want code wait_timeout, got %q", code)
 	}
 }
 
