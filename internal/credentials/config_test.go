@@ -3,6 +3,7 @@ package credentials
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -148,5 +149,116 @@ func TestCognitoClientIDFromPath(t *testing.T) {
 	t.Setenv("SUREVA_COGNITO_CLIENT_ID", "")
 	if got := CognitoClientIDFromPath(path); got != "config-client" {
 		t.Fatalf("client ID = %q, want config-client", got)
+	}
+}
+
+func TestClearTokenRemovesOnlyTokenAndSecuresFile(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	original := "api_url: https://api.example.com\norg: existing-org\ncognito_domain: auth.example.com\nnested:\n  enabled: true\ntoken: old-token\n"
+	if err := os.WriteFile(cfgPath, []byte(original), 0644); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	if err := ClearToken(cfgPath); err != nil {
+		t.Fatalf("ClearToken: %v", err)
+	}
+
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(raw), "token") {
+		t.Errorf("written YAML still mentions token:\n%s", raw)
+	}
+	v, err := loadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if v.InConfig("token") {
+		t.Error("token key still present")
+	}
+	for key, want := range map[string]string{
+		"api_url":        "https://api.example.com",
+		"org":            "existing-org",
+		"cognito_domain": "auth.example.com",
+	} {
+		if got := v.GetString(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if !v.GetBool("nested.enabled") {
+		t.Error("nested.enabled was not preserved")
+	}
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("config mode = %04o, want 0600", got)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(cfgPath))
+	if len(entries) != 1 {
+		t.Errorf("directory has %d entries, want only the config file", len(entries))
+	}
+}
+
+func TestClearTokenMissingFileIsNoOp(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "sub", "config.yaml")
+
+	if err := ClearToken(cfgPath); err != nil {
+		t.Fatalf("ClearToken: %v", err)
+	}
+	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+		t.Errorf("config file exists after no-op: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(cfgPath)); !os.IsNotExist(err) {
+		t.Errorf("config directory exists after no-op: %v", err)
+	}
+}
+
+func TestClearTokenWithoutTokenKeyLeavesFileUntouched(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("# keep me\norg:   existing-org\n")
+	if err := os.WriteFile(cfgPath, original, 0644); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	if err := ClearToken(cfgPath); err != nil {
+		t.Fatalf("ClearToken: %v", err)
+	}
+	got, _ := os.ReadFile(cfgPath)
+	if string(got) != string(original) {
+		t.Errorf("config rewritten:\ngot:  %q\nwant: %q", got, original)
+	}
+}
+
+func TestClearTokenRejectsCorruptConfigWithoutChangingIt(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("token: old-token\ninvalid: [unterminated\n")
+	if err := os.WriteFile(cfgPath, original, 0600); err != nil {
+		t.Fatalf("seed corrupt config: %v", err)
+	}
+
+	if err := ClearToken(cfgPath); err == nil {
+		t.Fatal("ClearToken succeeded with corrupt config, want error")
+	}
+	got, _ := os.ReadFile(cfgPath)
+	if string(got) != string(original) {
+		t.Fatalf("corrupt config changed after failure:\ngot:  %q\nwant: %q", got, original)
+	}
+}
+
+func TestSavedTokenFromPathIgnoresEnvironment(t *testing.T) {
+	t.Setenv("SUREVA_TOKEN", "env-token")
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	if got, err := SavedTokenFromPath(cfgPath); err != nil || got != "" {
+		t.Fatalf("missing file: got (%q, %v), want empty token", got, err)
+	}
+	if err := SaveToken(cfgPath, "file-token"); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+	if got, err := SavedTokenFromPath(cfgPath); err != nil || got != "file-token" {
+		t.Fatalf("got (%q, %v), want file-token", got, err)
 	}
 }

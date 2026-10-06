@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `sureva logout` (also `sureva auth logout`) removes the token saved in the
+  config file and keeps every other key. It first tries to revoke the token on
+  the server, matching it by its last four characters and revoking only when
+  exactly one token matches; a skipped or failed revoke never blocks the local
+  removal and is reported in a `warning`. `SUREVA_TOKEN` is never used or
+  changed, and a still-set `SUREVA_TOKEN` is flagged in the warning. Output has
+  `status` (`logged_out` or `not_logged_in`), `config_path`, `token_revoked`
+  and an optional `warning`.
+- `credentials.ClearToken` and `credentials.SavedTokenFromPath`.
+
+### Fixed
+
+- The `DefaultConfigPath` documentation now states the macOS location
+  (`~/Library/Application Support/sureva/config.yaml`).
+
 ### Removed
 
 - The Cognito provisioning script (`scripts/provision-cognito-cli-client.sh`),

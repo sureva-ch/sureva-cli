@@ -28,6 +28,7 @@ AGENT USAGE
 	}
 
 	auth.AddCommand(newAuthLoginCmd())
+	auth.AddCommand(newLogoutCmd())
 	auth.AddCommand(newAuthWhoamiCmd())
 	auth.AddCommand(newAuthTokenCmd())
 	return auth

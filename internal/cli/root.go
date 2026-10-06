@@ -69,6 +69,7 @@ EXIT CODES
 
 AUTHENTICATION
   Run sureva login for interactive browser authentication.
+  Run sureva logout to revoke and remove the saved token.
   Set SUREVA_TOKEN to a personal access token (sapi_...) for CI and agents.
   sureva auth login imports and verifies an existing PAT as an advanced fallback.
 
@@ -127,6 +128,7 @@ GLOBAL FLAG VALIDATION
 	// Attach subcommands.
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(NewLoginCmd())
+	root.AddCommand(newLogoutCmd())
 	root.AddCommand(NewAuthCmd())
 	root.AddCommand(NewOrgsCmd())
 	root.AddCommand(NewTeamsCmd())

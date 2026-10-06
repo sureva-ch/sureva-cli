@@ -151,6 +151,22 @@ Code with PKCE. It receives the callback on `127.0.0.1` port 8976, 8977, or
 and only then atomically saves it. If the browser cannot open, copy the URL
 printed in the terminal. A failed re-login preserves the existing token.
 
+### Logout
+
+```bash
+sureva logout
+```
+
+Removes the token saved in the config file, keeping other keys such as `org`.
+The CLI first tries to revoke that token on the server: it lists your tokens and
+revokes the one whose last four characters match the saved token, but only when
+exactly one matches. If the revoke is skipped or fails (for example the token
+already expired), the local token is still removed and the output carries a
+`warning`; check `sureva auth token list` and revoke it manually if needed.
+`sureva auth logout` is the same command. `SUREVA_TOKEN` is never used or
+changed: if it is still set, commands keep authenticating with it until you
+unset it.
+
 ### CI and agents
 
 Set the `SUREVA_TOKEN` environment variable to a personal access token:
@@ -179,7 +195,8 @@ sureva auth whoami
 ```
 
 Tokens can also be stored manually in the config file at:
-- **Linux/macOS**: `~/.config/sureva/config.yaml`
+- **Linux**: `~/.config/sureva/config.yaml`
+- **macOS**: `~/Library/Application Support/sureva/config.yaml`
 - **Windows**: `%APPDATA%\sureva\config.yaml`
 
 ```yaml
@@ -217,6 +234,7 @@ sureva upgrade --check                 # report current vs latest without changi
 
 ```bash
 sureva login                            # primary browser login with PKCE
+sureva logout                          # revoke (best effort) and remove the saved token; also: sureva auth logout
 sureva auth whoami                     # show current user identity
 printf '%s' "$SUREVA_TOKEN" | sureva auth login --token-stdin # advanced PAT import
 
