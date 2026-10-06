@@ -53,6 +53,15 @@ test "$(jq -r '.DomainDescription.Status // empty' <<<"$domain_description")" = 
 }
 managed_login_version="$(jq -r '.DomainDescription.ManagedLoginVersion // 1' <<<"$domain_description")"
 
+# The client offers the pool's own directory plus Google sign-in. Google is
+# derived from the pool rather than hardcoded: an app client cannot reference
+# an identity provider the pool does not have, so a pool without a Google
+# provider keeps a COGNITO-only client instead of failing the update.
+google_providers_json="$(aws cognito-idp list-identity-providers \
+  --region "$REGION" --user-pool-id "$USER_POOL_ID" --max-results 60 \
+  --query "Providers[?ProviderType=='Google'].ProviderName" --output json)"
+identity_providers_json="$(jq -c '["COGNITO"] + . | sort' <<<"$google_providers_json")"
+
 client_id="$(aws cognito-idp list-user-pool-clients \
   --region "$REGION" --user-pool-id "$USER_POOL_ID" --max-results 60 \
   --query "UserPoolClients[?ClientName=='$CLIENT_NAME'].ClientId | [0]" --output text)"
@@ -79,6 +88,7 @@ if [[ -z "$client_id" || "$client_id" = "None" ]]; then
     --arg pool "$USER_POOL_ID" \
     --arg name "$CLIENT_NAME" \
     --argjson callbacks "$callbacks_json" \
+    --argjson providers "$identity_providers_json" \
     '{
       UserPoolId: $pool,
       ClientName: $name,
@@ -87,7 +97,7 @@ if [[ -z "$client_id" || "$client_id" = "None" ]]; then
       AllowedOAuthFlows: ["code"],
       AllowedOAuthScopes: ["openid", "email", "profile"],
       CallbackURLs: $callbacks,
-      SupportedIdentityProviders: ["COGNITO"],
+      SupportedIdentityProviders: $providers,
       EnableTokenRevocation: true,
       PreventUserExistenceErrors: "ENABLED"
     }' >"$tmp"
@@ -102,7 +112,8 @@ else
   # owned by this flow so unrelated validity/attribute settings survive.
   # CallbackURLs is replaced outright, so any callback outside CALLBACKS is
   # removed.
-  jq --argjson callbacks "$callbacks_json" '
+  jq --argjson callbacks "$callbacks_json" \
+    --argjson providers "$identity_providers_json" '
       .UserPoolClient
       | del(.ClientSecret, .LastModifiedDate, .CreationDate)
       | .AllowedOAuthFlowsUserPoolClient = true
@@ -110,7 +121,7 @@ else
       | .AllowedOAuthScopes = ["openid", "email", "profile"]
       | .CallbackURLs = $callbacks
       | del(.LogoutURLs, .DefaultRedirectURI)
-      | .SupportedIdentityProviders = ["COGNITO"]
+      | .SupportedIdentityProviders = $providers
       | .EnableTokenRevocation = true
       | .PreventUserExistenceErrors = "ENABLED"
     ' <<<"$client_description" >"$tmp"
@@ -138,7 +149,11 @@ test "$(jq -c '.UserPoolClient.CallbackURLs | sort' <<<"$client")" = \
 }
 test "$(jq -c '.UserPoolClient.AllowedOAuthFlows | sort' <<<"$client")" = '["code"]'
 test "$(jq -c '.UserPoolClient.AllowedOAuthScopes | sort' <<<"$client")" = '["email","openid","profile"]'
-test "$(jq -c '.UserPoolClient.SupportedIdentityProviders | sort' <<<"$client")" = '["COGNITO"]'
+test "$(jq -c '.UserPoolClient.SupportedIdentityProviders | sort' <<<"$client")" = \
+  "$identity_providers_json" || {
+  echo "Cognito identity provider validation failed" >&2
+  exit 1
+}
 test "$(jq -r '.UserPoolClient.AllowedOAuthFlowsUserPoolClient' <<<"$client")" = "true"
 test "$(jq -r '.UserPoolClient.EnableTokenRevocation' <<<"$client")" = "true"
 
@@ -169,5 +184,6 @@ if [[ "$managed_login_version" = "2" ]]; then
 fi
 
 printf 'Cognito CLI client %s: %s\n' "$action" "$client_id"
+printf 'Identity providers: %s\n' "$(jq -r 'join(", ")' <<<"$identity_providers_json")"
 printf 'Managed Login branding: %s\n' "$branding_action"
 printf 'Set the GitHub Actions variable SUREVA_COGNITO_CLIENT_ID to this public client ID.\n'

@@ -72,7 +72,7 @@ revoke any orphaned token during incident cleanup.
 | OAuth grant | Authorization code only |
 | PKCE | S256, enforced by the CLI flow |
 | Scopes | `openid email profile` |
-| Identity provider | `COGNITO` |
+| Identity providers | `COGNITO`, plus the pool's Google provider when the pool has one |
 | Callbacks | `http://127.0.0.1:8976/callback`, `http://127.0.0.1:8977/callback`, `http://127.0.0.1:8978/callback` |
 | Token revocation | Enabled |
 | Managed Login | A branding style for the client when the domain uses Managed Login version 2 |
