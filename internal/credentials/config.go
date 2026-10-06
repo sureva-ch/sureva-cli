@@ -45,8 +45,11 @@ func DomainSuffixFromPath(configPath string) string {
 
 // DefaultConfigPath returns the OS-appropriate path for the CLI config file.
 //
-//   - Linux/macOS: $XDG_CONFIG_HOME/sureva/config.yaml (usually ~/.config/sureva/config.yaml)
-//   - Windows:     %APPDATA%\sureva\config.yaml
+// The directory comes from os.UserConfigDir:
+//
+//   - Linux:   $XDG_CONFIG_HOME/sureva/config.yaml (usually ~/.config/sureva/config.yaml)
+//   - macOS:   ~/Library/Application Support/sureva/config.yaml
+//   - Windows: %APPDATA%\sureva\config.yaml
 func DefaultConfigPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -95,6 +98,51 @@ func SaveToken(path, token string) error {
 
 	v.Set("token", token)
 
+	return writeConfigAtomic(path, v)
+}
+
+// SavedTokenFromPath returns the token stored under the "token" key of the
+// config file at path, ignoring SUREVA_TOKEN. It returns an empty string when
+// the file does not exist or holds no token, and an error when the file is
+// unreadable or invalid. The value is returned as stored, matching what the
+// resolution chain would use.
+func SavedTokenFromPath(path string) (string, error) {
+	v, err := loadConfig(path)
+	if err != nil {
+		return "", err
+	}
+	return v.GetString("token"), nil
+}
+
+// ClearToken removes the "token" key from the config file at path and keeps
+// every other key. A missing file, or a file without a token key, is a no-op
+// that returns nil and never creates the file. Existing configuration must be
+// readable and valid: otherwise ClearToken fails without changing it. The
+// replacement is written atomically with mode 0600.
+func ClearToken(path string) error {
+	v, err := loadConfig(path)
+	if err != nil {
+		return fmt.Errorf("read existing config: %w", err)
+	}
+	if !v.InConfig("token") {
+		return nil
+	}
+
+	// viper has no key deletion, so rebuild the config from the remaining keys.
+	settings := v.AllSettings()
+	delete(settings, "token")
+	remaining := viper.New()
+	remaining.SetConfigType("yaml")
+	if err := remaining.MergeConfigMap(settings); err != nil {
+		return fmt.Errorf("rebuild config: %w", err)
+	}
+	return writeConfigAtomic(path, remaining)
+}
+
+// writeConfigAtomic writes v to path through a temporary file in the same
+// directory and a rename, so readers never observe a partial file. The file is
+// created with mode 0600 (owner read/write only).
+func writeConfigAtomic(path string, v *viper.Viper) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
 	if err != nil {
 		return fmt.Errorf("create temporary config: %w", err)
