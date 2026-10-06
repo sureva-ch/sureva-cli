@@ -283,6 +283,15 @@ its first deployment finishes. If the wait ends in `wait_timeout` or
 polled state, or the create response if no poll finished) and the command exits
 1, so its `id` is available without `apps list`.
 
+While waiting, the command also checks the app's latest deployment. A failed
+first build leaves `domain_status` at `pending`, so when that deployment ends
+`failed` or `cancelled` the wait stops at once with `deploy_failed` (exit 1, app
+on stdout); the error names the deployment and the
+`deploys status <app-id> <deploy-id>` command that shows it. The check is
+best-effort: if the deployments cannot be listed, or there are none, it is
+skipped and the wait continues until `domain_status` is `active`, which remains
+the only success condition.
+
 **App types**: `web` | `web-ssr` | `api` | `sse`
 
 **Source type**: an app is either GitHub-backed (`source_type: "github"`) or
@@ -617,11 +626,11 @@ envelope:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--wait` | false | Block until terminal state; for `apps create`, until `domain_status` is `active` (when the first deployment finishes) |
+| `--wait` | false | Block until terminal state; for `apps create`, until `domain_status` is `active` (when the first deployment finishes), or until its latest deployment fails (`deploy_failed`) |
 | `--wait-interval` | 5s | Polling interval; must be positive (`validation_error`, exit 4, otherwise) |
 | `--wait-timeout` | 10m (create) / 15m (deploys) | Max wait time |
 
-Timeout exits 1 with `code: "wait_timeout"`. Non-success terminal exits 1 with `code: "domain_failed"` or `"deploy_failed"`. For `apps create`, stdout carries the app JSON even when the command exits 1 for `wait_timeout` or `domain_failed`; the error envelope stays on stderr.
+Timeout exits 1 with `code: "wait_timeout"`. Non-success terminal exits 1 with `code: "domain_failed"` or `"deploy_failed"`; `apps create` can end in any of the three (`deploy_failed` when the app's latest deployment failed or was cancelled while the domain was still pending). For `apps create`, stdout carries the app JSON even when the command exits 1 for `wait_timeout`, `domain_failed` or `deploy_failed`; the error envelope stays on stderr.
 
 ### Logs
 

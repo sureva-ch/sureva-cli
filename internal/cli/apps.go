@@ -165,7 +165,10 @@ no repository, and releases are listed with 'sources list' and deployed with
 pipelines). For a web app that happens when its first deployment finishes, so
 the wait covers that build, not only the creation call. On wait_timeout or
 domain_failed the created app is still printed on stdout, with its id, and the
-command then exits 1 with the error on stderr.`,
+command then exits 1 with the error on stderr. The wait also ends early with
+deploy_failed (exit 1, app printed) when the app's latest deployment fails or
+is cancelled, which leaves the domain pending; the error names the deployment
+and the 'deploys status' command that shows it.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			name, _ := cmd.Flags().GetString("name")
 			appType, _ := cmd.Flags().GetString("type")
@@ -249,6 +252,7 @@ command then exits 1 with the error on stderr.`,
 
 			if wait {
 				var finalApp *client.App
+				var failedDeploy *client.Deployment
 				pollErr := pollUntil(cmd.Context(), waitInterval, waitTimeout, func(ctx context.Context) (bool, error) {
 					a, gErr := c.GetApp(ctx, orgID, app.ID)
 					if gErr != nil {
@@ -260,6 +264,18 @@ command then exits 1 with the error on stderr.`,
 						return true, nil
 					case "failed":
 						return false, errDomainFailed
+					}
+					// A failed first build leaves domain_status pending, so
+					// also look at the latest deployment. This is a
+					// best-effort signal: a listing error or an empty list is
+					// ignored and the wait continues, because domain_status
+					// "active" stays the only success condition and a token
+					// that cannot list deployments must not break a wait that
+					// works without this check. The API returns deployments
+					// newest first, so the first element is the latest.
+					if deploys, lErr := c.ListDeployments(ctx, orgID, app.ID); lErr == nil && len(deploys) > 0 && isDeployFailedStatus(deploys[0].Status) {
+						failedDeploy = &deploys[0]
+						return false, errDeployFailed
 					}
 					return false, nil
 				})
@@ -294,6 +310,15 @@ command then exits 1 with the error on stderr.`,
 						)
 						return &ExitError{Code: output.ExitGeneral}
 					}
+					if errors.Is(pollErr, errDeployFailed) {
+						printCreated()
+						_ = r.RenderError(
+							fmt.Sprintf("deployment %s of app %s reached a failed terminal state, so the domain will not become active; check with 'deploys status %s %s --org <slug>'", failedDeploy.ID, app.ID, app.ID, failedDeploy.ID),
+							"deploy_failed",
+							-1,
+						)
+						return &ExitError{Code: output.ExitGeneral}
+					}
 					return handleAPIError(r, pollErr)
 				}
 				app = finalApp
@@ -312,7 +337,7 @@ command then exits 1 with the error on stderr.`,
 	cmd.Flags().String("runtime", "", "Runtime: one of nodejs24|python314|go126; required when --type is not web")
 	cmd.Flags().String("team", "", "Team slug or ID; required when org has multiple teams, auto-selected when exactly one team exists")
 	cmd.Flags().Bool("use-existing-repo", false, "Create the app from an existing GitHub repository of the same name instead of failing; its contents are left untouched and no template is committed. Only for orgs with a connected GitHub organization")
-	cmd.Flags().Bool("wait", false, "Block until the app's domain_status is active (when the first deployment finishes); on timeout or failure the created app is still printed and the command exits 1")
+	cmd.Flags().Bool("wait", false, "Block until the app's domain_status is active (when the first deployment finishes); ends early with deploy_failed when the latest deployment fails; on timeout or failure the created app is still printed and the command exits 1")
 	cmd.Flags().Duration("wait-interval", 5*time.Second, "Polling interval as a Go duration when --wait is active (e.g. 5s)")
 	cmd.Flags().Duration("wait-timeout", 10*time.Minute, "Maximum wait as a Go duration for domain activation (e.g. 10m)")
 	return cmd

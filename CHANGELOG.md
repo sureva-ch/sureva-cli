@@ -15,6 +15,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The `apps create` help and README now state that `--wait` blocks until the
   app's `domain_status` is `active`, which happens when the first deployment
   finishes (sureva-ch/sureva#89).
+- `apps create --wait` now also watches the app's latest deployment and ends at
+  once with `deploy_failed` (exit 1, app printed on stdout) when it fails or is
+  cancelled, instead of waiting for `wait_timeout`: a failed first build leaves
+  `domain_status` at `pending`. The check is best-effort (a deployments listing
+  error or an empty list is ignored) and `domain_status` `active` stays the only
+  success condition (sureva-ch/sureva#89).
 
 ## [0.4.0] - 2026-10-06
 

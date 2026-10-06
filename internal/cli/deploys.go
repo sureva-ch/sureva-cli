@@ -15,6 +15,12 @@ import (
 // when the deployment reaches a non-success terminal state (failed|cancelled).
 var errDeployFailed = errors.New("deploy_failed")
 
+// isDeployFailedStatus reports whether a deployment status is a non-success
+// terminal state. Shared by 'deploys trigger --wait' and 'apps create --wait'.
+func isDeployFailedStatus(status string) bool {
+	return status == "failed" || status == "cancelled"
+}
+
 // NewDeploysCmd returns the `deploys` command group.
 func NewDeploysCmd() *cobra.Command {
 	deploys := &cobra.Command{
@@ -118,10 +124,10 @@ follows the API's own error code, which is repeated in details.api_code.
 						return false, gErr
 					}
 					finalDeploy = d
-					switch d.Status {
-					case "success":
+					if d.Status == "success" {
 						return true, nil
-					case "failed", "cancelled":
+					}
+					if isDeployFailedStatus(d.Status) {
 						return false, errDeployFailed
 					}
 					return false, nil
