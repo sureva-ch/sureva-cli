@@ -22,16 +22,10 @@ SUREVA_COGNITO_CLIENT_ID=3aochit9b7f1f58m0c1cgffa1k \
   sureva login
 ```
 
-## Provisioning the Cognito app client
+## The Cognito app client
 
-`scripts/provision-cognito-cli-client.sh` derives the pool, client name and
-login domain from `$ENVIRONMENT` via `infra/lib/config.sh`. **It has no
-default** — running without it exits non-zero rather than targeting production.
-
-```sh
-ENVIRONMENT=prod bash scripts/provision-cognito-cli-client.sh
-ENVIRONMENT=dev  bash scripts/provision-cognito-cli-client.sh
-```
+The provisioning script is not kept in this repository. The client exists once
+per environment:
 
 | `ENVIRONMENT` | User pool | Client name | Client ID | Login domain | Managed Login |
 |---|---|---|---|---|---|
@@ -42,16 +36,16 @@ Region is `us-east-2`. The `eu-central-2` pools were retired in the 2026-08-24
 cutover and no longer exist.
 
 `update-user-pool-client` **replaces** the whole client; every omitted field
-resets to its default. The script builds updates from a
-`describe-user-pool-client` snapshot. Never hand-run a partial update.
+resets to its default. Build updates from a `describe-user-pool-client`
+snapshot. Never hand-run a partial update.
 
 ### Managed Login version 2 needs a branding style per client
 
 On a version 2 domain (prod), a client without a branding style shows "Login
 pages unavailable" instead of the sign-in page, while `/oauth2/authorize`
-still answers `302` to `/login`, so `curl` cannot detect it. The script
-creates a style with Cognito-provided values only when none exists, and never
-modifies an existing one.
+still answers `302` to `/login`, so `curl` cannot detect it. Create a style
+with Cognito-provided values only when none exists, and never modify an
+existing one.
 
 ### Callback URLs are matched as exact strings
 
@@ -62,8 +56,8 @@ three ports `internal/authflow` binds, and the literal host
 fails **every** login with `error=redirect_mismatch`, even though the two
 resolve to the same address. The dev client was initially registered with
 `localhost` and hit exactly this, and so did both clients after the 2026-08-24
-cutover (issue #1). `internal/authflow/provision_script_test.go` fails
-`go test` if the script's callback list drifts from `authflow.DefaultPorts`.
+cutover (issue #1). Nothing in this repository checks the registered list
+against `authflow.DefaultPorts`.
 
 ## Conventions
 
