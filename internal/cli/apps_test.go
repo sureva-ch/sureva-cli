@@ -1,10 +1,13 @@
 package cli_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sureva-ch/sureva-cli/internal/output"
 )
@@ -585,6 +588,183 @@ func TestAppsCreate_Wait_Timeout_ExitGeneral(t *testing.T) {
 	}
 	if code, _ := env["code"].(string); code != "wait_timeout" {
 		t.Errorf("wait timeout: want code wait_timeout, got %q", code)
+	}
+}
+
+// waitDeployMux returns a mux for an `apps create --wait` run whose created app
+// is app-new. The app poll answers pending until it has been polled
+// activeAfter times, then active (a negative value keeps it pending).
+// deployments serves GET .../apps/app-new/deployments.
+func waitDeployMux(activeAfter int, deployments http.HandlerFunc) *http.ServeMux {
+	const oneTeam = `[{"id":"team-1","org_id":"org-1","slug":"engineers","name":"Engineers","is_system":false,"is_active":true,"created_at":"2024-01-01T00:00:00Z"}]`
+	mux := appsCreateMux("acme", "org-1", oneTeam)
+	mux.HandleFunc("/v1/orgs/org-1/apps", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"app-new","org_id":"org-1","name":"my-app","type":"web","subdomain":"my-app","domain_status":"pending","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`))
+	})
+	var polls int32
+	mux.HandleFunc("/v1/orgs/org-1/apps/app-new", func(w http.ResponseWriter, _ *http.Request) {
+		n := int(atomic.AddInt32(&polls, 1))
+		domainStatus := "pending"
+		if activeAfter >= 0 && n > activeAfter {
+			domainStatus = "active"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"app-new","org_id":"org-1","name":"my-app","type":"web","subdomain":"my-app","domain_status":"` + domainStatus + `","is_active":true,"created_at":"2024-01-01T00:00:00Z"}`))
+	})
+	mux.HandleFunc("/v1/orgs/org-1/apps/app-new/deployments", deployments)
+	return mux
+}
+
+// deploymentsJSON answers the deployments listing with body (newest first).
+func deploymentsJSON(body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}
+}
+
+// runWaitCreate runs `apps create --wait` against mux with a short interval and
+// the given timeout.
+func runWaitCreate(t *testing.T, mux *http.ServeMux, timeout string) (outBuf, errBuf *bytes.Buffer, elapsed time.Duration, err error) {
+	t.Helper()
+	srv := newTestServer(t, mux)
+	outBuf, errBuf, exec := newTestRoot(t, srv)
+	start := time.Now()
+	err = exec("apps", "create", "--name", "my-app", "--type", "web", "--region", "eu-central-1", "--org", "acme",
+		"--wait", "--wait-interval", "1ms", "--wait-timeout", timeout)
+	return outBuf, errBuf, time.Since(start), err
+}
+
+func TestAppsCreate_Wait_LatestDeploymentFailed_ExitDeployFailed(t *testing.T) {
+	// Newest first: the failed build is the latest deployment; the older one
+	// succeeded and must not matter.
+	mux := waitDeployMux(-1, deploymentsJSON(`[
+		{"id":"dep-2","app_id":"app-new","status":"failed","created_at":"2024-01-01T00:02:00Z","updated_at":"2024-01-01T00:03:00Z"},
+		{"id":"dep-1","app_id":"app-new","status":"success","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:01:00Z"}]`))
+
+	outBuf, errBuf, elapsed, err := runWaitCreate(t, mux, "10m")
+
+	if elapsed > 30*time.Second {
+		t.Errorf("deploy failed: wait should end promptly, took %s", elapsed)
+	}
+	if got := exitCode(err); got != output.ExitGeneral {
+		t.Errorf("deploy failed: want exit %d, got %d; stderr: %s", output.ExitGeneral, got, errBuf)
+	}
+	var app map[string]any
+	if jsonErr := json.NewDecoder(outBuf).Decode(&app); jsonErr != nil {
+		t.Fatalf("deploy failed: stdout not JSON: %v\noutput: %s", jsonErr, outBuf)
+	}
+	if id, _ := app["id"].(string); id != "app-new" {
+		t.Errorf("deploy failed: want app id app-new on stdout, got %q", id)
+	}
+	var env map[string]any
+	if jsonErr := json.NewDecoder(errBuf).Decode(&env); jsonErr != nil {
+		t.Fatalf("deploy failed: stderr not JSON: %v\nstderr: %s", jsonErr, errBuf)
+	}
+	if code, _ := env["code"].(string); code != "deploy_failed" {
+		t.Errorf("deploy failed: want code deploy_failed, got %q", code)
+	}
+	msg, _ := env["error"].(string)
+	for _, want := range []string{"app-new", "dep-2", "deploys status app-new dep-2"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("deploy failed: message %q should contain %q", msg, want)
+		}
+	}
+}
+
+func TestAppsCreate_Wait_OlderDeploymentFailed_KeepsWaiting(t *testing.T) {
+	// Only the latest deployment counts: an older failure followed by a newer
+	// success must not end the wait.
+	mux := waitDeployMux(2, deploymentsJSON(`[
+		{"id":"dep-2","app_id":"app-new","status":"success","created_at":"2024-01-01T00:02:00Z","updated_at":"2024-01-01T00:03:00Z"},
+		{"id":"dep-1","app_id":"app-new","status":"failed","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:01:00Z"}]`))
+
+	outBuf, errBuf, _, err := runWaitCreate(t, mux, "5s")
+
+	if got := exitCode(err); got != output.ExitOK {
+		t.Fatalf("older deployment failed: want exit 0, got %d; stderr: %s", got, errBuf)
+	}
+	var app map[string]any
+	if jsonErr := json.NewDecoder(outBuf).Decode(&app); jsonErr != nil {
+		t.Fatalf("older deployment failed: stdout not JSON: %v\noutput: %s", jsonErr, outBuf)
+	}
+	if ds, _ := app["domain_status"].(string); ds != "active" {
+		t.Errorf("older deployment failed: want domain_status active, got %q", ds)
+	}
+}
+
+func TestAppsCreate_Wait_DeploymentsListError_KeepsWaiting(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			mux := waitDeployMux(2, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"error":"nope"}`))
+			})
+
+			outBuf, errBuf, _, err := runWaitCreate(t, mux, "5s")
+
+			if got := exitCode(err); got != output.ExitOK {
+				t.Fatalf("deployments %d: want exit 0, got %d; stderr: %s", status, got, errBuf)
+			}
+			var app map[string]any
+			if jsonErr := json.NewDecoder(outBuf).Decode(&app); jsonErr != nil {
+				t.Fatalf("deployments %d: stdout not JSON: %v\noutput: %s", status, jsonErr, outBuf)
+			}
+			if ds, _ := app["domain_status"].(string); ds != "active" {
+				t.Errorf("deployments %d: want domain_status active, got %q", status, ds)
+			}
+		})
+	}
+}
+
+func TestAppsCreate_Wait_NoDeployments_KeepsWaiting(t *testing.T) {
+	mux := waitDeployMux(2, deploymentsJSON(`[]`))
+
+	outBuf, errBuf, _, err := runWaitCreate(t, mux, "5s")
+
+	if got := exitCode(err); got != output.ExitOK {
+		t.Fatalf("no deployments: want exit 0, got %d; stderr: %s", got, errBuf)
+	}
+	var app map[string]any
+	if jsonErr := json.NewDecoder(outBuf).Decode(&app); jsonErr != nil {
+		t.Fatalf("no deployments: stdout not JSON: %v\noutput: %s", jsonErr, outBuf)
+	}
+	if ds, _ := app["domain_status"].(string); ds != "active" {
+		t.Errorf("no deployments: want domain_status active, got %q", ds)
+	}
+}
+
+func TestAppsCreate_Wait_DeploymentBuilding_KeepsWaiting(t *testing.T) {
+	// A deployment still in progress does not end the wait: the command runs to
+	// the timeout and reports wait_timeout, not deploy_failed.
+	mux := waitDeployMux(-1, deploymentsJSON(`[{"id":"dep-1","app_id":"app-new","status":"building","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}]`))
+
+	_, errBuf, _, err := runWaitCreate(t, mux, "50ms")
+
+	if got := exitCode(err); got != output.ExitGeneral {
+		t.Errorf("deployment building: want exit %d, got %d", output.ExitGeneral, got)
+	}
+	var env map[string]any
+	if jsonErr := json.NewDecoder(errBuf).Decode(&env); jsonErr != nil {
+		t.Fatalf("deployment building: stderr not JSON: %v\nstderr: %s", jsonErr, errBuf)
+	}
+	if code, _ := env["code"].(string); code != "wait_timeout" {
+		t.Errorf("deployment building: want code wait_timeout, got %q", code)
+	}
+}
+
+func TestAppsCreate_Wait_DomainActiveWinsOverFailedDeployment(t *testing.T) {
+	// active is checked before the deployment: a failed latest deployment must
+	// not turn an already-active domain into an error.
+	mux := waitDeployMux(0, deploymentsJSON(`[{"id":"dep-1","app_id":"app-new","status":"failed","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}]`))
+
+	_, errBuf, _, err := runWaitCreate(t, mux, "5s")
+
+	if got := exitCode(err); got != output.ExitOK {
+		t.Errorf("active wins: want exit 0, got %d; stderr: %s", got, errBuf)
 	}
 }
 
