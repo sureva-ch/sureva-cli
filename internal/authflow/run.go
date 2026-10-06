@@ -109,9 +109,8 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 }
 
 // callbackURL is the redirect_uri for a bound loopback port. Cognito matches
-// it as an exact string, so scripts/provision-cognito-cli-client.sh must
-// register this value for every port in DefaultPorts (see
-// provision_script_test.go).
+// it as an exact string, so the app client must register this value for
+// every port in DefaultPorts (see docs/cognito-cli-client.md).
 func callbackURL(port int) string {
 	return fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 }

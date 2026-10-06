@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- The Cognito provisioning script (`scripts/provision-cognito-cli-client.sh`),
+  its environment configuration (`infra/lib/`) and its callback drift test are
+  no longer kept in this repository.
+  `docs/cognito-cli-client.md` keeps the contract the app client must meet,
+  which now includes the pool's Google identity provider.
+
 ## [0.3.0] - 2026-10-05
 
 ### Added

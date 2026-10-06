@@ -1,16 +1,8 @@
-# Provision the Sureva CLI Cognito client
+# The Sureva CLI Cognito client
 
-`sureva login` requires a dedicated **public, secretless** Cognito app client. The repository includes an idempotent provisioning script that runs against either environment.
+`sureva login` requires a dedicated **public, secretless** Cognito app client. The provisioning script is not kept in this repository; this page records the contract the client must meet.
 
-## Quick path
-
-1. Authenticate the AWS CLI to account `255398768146` with permission to manage Cognito app clients and Managed Login branding.
-2. Run `ENVIRONMENT=prod scripts/provision-cognito-cli-client.sh` (or `ENVIRONMENT=dev`).
-3. Set the repository Actions variable `SUREVA_COGNITO_CLIENT_ID` to the printed public client ID.
-
-`ENVIRONMENT` has no default: running the script without it exits non-zero
-rather than targeting production. `infra/lib/config.sh` maps it to the pool,
-client name and login domain:
+The client exists once per environment. A release build takes its client ID from the repository Actions variable `SUREVA_COGNITO_CLIENT_ID`.
 
 | `ENVIRONMENT` | User pool | Client name | Client ID | Login domain | Managed Login |
 |---|---|---|---|---|---|
@@ -18,7 +10,7 @@ client name and login domain:
 | `dev` | `us-east-2_DRIUL20UO` | `sureva-cli-dev` | `3aochit9b7f1f58m0c1cgffa1k` | `auth.dev.sureva.com` | version 1 |
 
 The identity moved from `eu-central-2` to `us-east-2` on 2026-08-24; the
-`eu-central-2` pools no longer exist. The script fails closed unless it finds the expected account, region `us-east-2`, the environment's user pool, and its active login domain. It never prints a token or client secret.
+`eu-central-2` pools no longer exist.
 
 ## Pointing the CLI at a non-production environment
 
@@ -52,10 +44,9 @@ the same address. The dev client was initially registered with `localhost` and
 hit exactly this, and so did both clients after the 2026-08-24 cutover
 (issue #1).
 
-The script registers exactly these three URLs and removes any other callback,
-such as a leftover `http://localhost:8976/callback`, on its next run.
-`internal/authflow/provision_script_test.go` fails `go test` if the script's
-list drifts from `authflow.DefaultPorts`.
+Register exactly these three URLs and remove any other callback, such as a
+leftover `http://localhost:8976/callback`. They must match
+`authflow.DefaultPorts`; nothing in this repository checks the registered list.
 
 If PAT validation or local persistence fails after minting, `sureva login`
 attempts to revoke the new PAT without replacing any existing local token. A
@@ -72,20 +63,20 @@ revoke any orphaned token during incident cleanup.
 | OAuth grant | Authorization code only |
 | PKCE | S256, enforced by the CLI flow |
 | Scopes | `openid email profile` |
-| Identity provider | `COGNITO` |
+| Identity providers | `COGNITO`, plus the pool's Google provider when the pool has one |
 | Callbacks | `http://127.0.0.1:8976/callback`, `http://127.0.0.1:8977/callback`, `http://127.0.0.1:8978/callback` |
 | Token revocation | Enabled |
 | Managed Login | A branding style for the client when the domain uses Managed Login version 2 |
 
 `AllowedOAuthFlowsUserPoolClient` must be enabled or Cognito ignores the callback, scopes, and OAuth flow configuration.
 
-`update-user-pool-client` replaces the whole client and resets every omitted field to its default. When the client already exists, the script builds the update from a `describe-user-pool-client` snapshot and overrides only the fields in this table.
+`update-user-pool-client` replaces the whole client and resets every omitted field to its default. When the client already exists, build the update from a `describe-user-pool-client` snapshot and override only the fields in this table.
 
 ### Managed Login version 2 needs a branding style per client
 
 Under Managed Login version 2, an app client without a branding style shows "Login pages unavailable. Please contact an administrator." instead of the sign-in page. `curl` does not reveal this: `/oauth2/authorize` still answers `302` to `/login`. API-created clients get no style automatically.
 
-When `describe-user-pool-domain` reports `ManagedLoginVersion: 2`, the script checks `describe-managed-login-branding-by-client`. If that returns `ResourceNotFoundException`, it creates a style with `--use-cognito-provided-values`. An existing style is never modified, because it may carry custom branding. Version 1 domains (classic hosted UI) need no style, and the script skips the step.
+When `describe-user-pool-domain` reports `ManagedLoginVersion: 2`, check `describe-managed-login-branding-by-client`. If that returns `ResourceNotFoundException`, create a style with `--use-cognito-provided-values`. Never modify an existing style, because it may carry custom branding. Version 1 domains (classic hosted UI) need no style.
 
 ## Runtime trust boundary
 
