@@ -30,6 +30,7 @@ func NewDeploysCmd() *cobra.Command {
 
 AGENT USAGE
   Trigger and poll:
+    sureva releases list <app-id> --org <slug> | jq -r '.[].tag_name'
     sureva deploys trigger <app-id> --org <slug> --tag v1.2.3
     sureva deploys trigger <app-id> --org <slug> --source-id <source-id>
     sureva deploys status <app-id> <deploy-id> --org <slug>
@@ -55,8 +56,9 @@ func newDeploysTriggerCmd() *cobra.Command {
 VALIDATION / INPUTS
   <app-id>: application ID returned by apps list/create.
   --org: required organization slug unless a default org is configured.
-  --tag: release tag of a GitHub-backed app (example: v1.2.3); required by the
-         API for API and SSE app types. Rejected for an upload-backed app.
+  --tag: release tag of a GitHub-backed app (example: v1.2.3), from
+         'sureva releases list <app-id>'; required by the API for api, web-ssr
+         and sse app types. Rejected for an upload-backed app.
   --source-id: release ID of an upload-backed app, from 'sources list'. Deploys
          that release, which is also how you roll back. With neither --tag nor
          --source-id an upload-backed app deploys its latest ready release.
@@ -160,7 +162,7 @@ follows the API's own error code, which is repeated in details.api_code.
 			return nil
 		},
 	}
-	cmd.Flags().String("tag", "", "Release tag of a GitHub-backed app (e.g. v1.2.3); required for API and SSE app types; not accepted for an upload-backed app")
+	cmd.Flags().String("tag", "", "Release tag of a GitHub-backed app (e.g. v1.2.3, see 'releases list'); required for api, web-ssr and sse app types; not accepted for an upload-backed app")
 	cmd.Flags().String("source-id", "", "Release ID of an upload-backed app (see 'sources list'); deploys that release, also used to roll back; mutually exclusive with --tag")
 	cmd.Flags().String("env-id", "", "Environment UUID; defaults to the production environment when empty")
 	cmd.Flags().Bool("wait", false, "Wait for deployment to reach a terminal state before returning")

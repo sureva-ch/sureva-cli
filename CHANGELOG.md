@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `sureva releases list <app-id>` lists the releases of a GitHub-backed app
+  (the API's `GET /v1/orgs/{org}/apps/{app}/releases`), so the tag for
+  `sureva deploys trigger <app-id> --tag <tag>` no longer has to be looked up in
+  GitHub. Draft releases are not listed, prereleases are, and an app without
+  releases prints `[]`. On an upload-backed app it makes no releases request and
+  exits 4 with the new error code `upload_backed_app`; use `sources list` there.
+  The command appears in `sureva --help --json` (sureva-ch/sureva#93).
+
+### Changed
+
+- The `deploys trigger --tag` help now points to `releases list` and names the
+  app types that require a tag (`api`, `web-ssr` and `sse`, as the API does);
+  the `sources` help and README say a GitHub-backed app has no source releases
+  instead of no releases (sureva-ch/sureva#93).
+
 ## [0.4.1] - 2026-10-06
 
 ### Fixed
