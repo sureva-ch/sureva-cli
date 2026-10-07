@@ -353,8 +353,8 @@ failed and sending the same archive again can succeed; `false` means the archive
 has to change. A row rejected before the API recorded codes has neither. An API
 that limits validation attempts also reports `attempts` and `max_attempts`, and
 then `retryable` is true only while attempts remain. A GitHub-backed app has no
-releases: `sources list` is empty (only `sources pull` reports
-`github_backed_app` for it).
+source releases: `sources list` is empty (only `sources pull` reports
+`github_backed_app` for it); its releases are listed by `releases list`.
 `available: false` on a `ready` release means its stored version is gone and it
 can no longer be deployed.
 
@@ -589,6 +589,29 @@ updating; the same list is in the CHANGELOG):
 - A `--wait-interval` that is not positive is now a `validation_error` (exit 4)
   in `deploy`, `deploys trigger --wait` and `apps create --wait`; it used to
   panic.
+
+### Releases (GitHub-backed apps)
+
+A GitHub-backed app deploys a release of its repository by tag. Create the
+release in GitHub, find its tag with `releases list`, then deploy it:
+
+```bash
+sureva releases list <app-id> --org <slug>                       # releases, newest first
+sureva releases list <app-id> --org <slug> | jq -r '.[0].tag_name'
+sureva deploys trigger <app-id> --org <slug> --tag <tag>
+```
+
+Each row is the release as GitHub reports it: `id`, `tag_name`, `name`, `body`,
+`draft`, `prerelease`, `published_at` (empty when GitHub has none), `html_url`
+and `author` (`login`, `avatar_url`). Draft releases are not listed;
+prereleases are. At most 100 releases are listed (the API returns one page),
+and an app without releases prints `[]`. The `tag_name` is what `--tag` takes. A
+tag the API's tag format rejects (for example one containing `/`) is listed but
+cannot be deployed.
+
+An upload-backed app has no GitHub releases: the command makes no releases
+request, prints nothing on stdout and exits 4 with `code: "upload_backed_app"`.
+Use `sources list` for it.
 
 ### Deployments
 

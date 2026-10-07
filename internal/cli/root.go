@@ -53,7 +53,8 @@ EXIT CODES
   apart by the "code" (and "http_status") in the stderr envelope. The API's own
   stable error code is repeated in "details.api_code" when it sent one, with the
   facts that come with it (details.source_status, details.validation_code,
-  details.retryable). For deploys trigger: source_expired (410, release no
+  details.retryable). For releases list: upload_backed_app (exit 4, the app
+  is upload-backed: use 'sureva sources list'). For deploys trigger: source_expired (410, release no
   longer stored), source_not_ready (409, release not ready or rejected),
   no_ready_source (404, exit 3, nothing to deploy yet), deploy_failed (the
   deployment itself failed under --wait). For deploy: archive_too_large,
@@ -138,6 +139,7 @@ GLOBAL FLAG VALIDATION
 	root.AddCommand(NewDeployCmd())
 	root.AddCommand(NewDeploysCmd())
 	root.AddCommand(NewSourcesCmd())
+	root.AddCommand(NewReleasesCmd())
 	root.AddCommand(NewLogsCmd())
 	root.AddCommand(NewChangesCmd())
 	root.AddCommand(NewUpgradeCmd())

@@ -43,8 +43,9 @@ ERRORS (stderr envelope "code"; the API's own code is in details.api_code)
   auth_error               (2) missing or expired credentials.
   network_error            (5) no HTTP response.
 
-An app that deploys from GitHub has no releases: 'list' is empty and 'get'
-answers not_found. Only 'sources pull' reports github_backed_app for it.`,
+An app that deploys from GitHub has no source releases: 'list' is empty and
+'get' answers not_found. Only 'sources pull' reports github_backed_app for it.
+Its releases are the ones in GitHub: see 'sureva releases list'.`,
 	}
 	sources.AddCommand(newSourcesListCmd())
 	sources.AddCommand(newSourcesGetCmd())
@@ -63,7 +64,8 @@ VALIDATION / INPUTS
   <app-id>: application ID returned by apps list/create.
   --org: required organization slug unless a default org is configured.
 
-A GitHub-backed app has no source releases: the list is empty.`,
+A GitHub-backed app has no source releases: the list is empty. For its GitHub
+releases use 'sureva releases list <app-id>'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, r, err := newAuthenticatedClient(cmd)
