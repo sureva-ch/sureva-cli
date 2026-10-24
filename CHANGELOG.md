@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+
+- Release binaries are built with Go 1.26.10, which fixes CVE-2026-111943
+  (`crypto/x509`, GO-2026-6809). The `toolchain` directive moved from go1.26.6
+  to go1.26.10; the minimum Go version for `go install` (`go 1.25.11`) is
+  unchanged, but Go 1.25 has no fix, so prefer the released binaries or a
+  Go 1.26.10+ toolchain (sureva-ch/sureva#106).
+
 ## [0.5.0] - 2026-10-06
 
 ### Added
